@@ -102,8 +102,8 @@ async function playMergeWithRate(rate = 1.0) {
 
 // Titreşim-güvenli sarmalayıcı: hapticsEnabled false ise çalışmaz
 const safeHaptic = {
-  impact:       (style) => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.impactAsync(style); },
-  notification: (type)  => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.notificationAsync(type); },
+  impact: (style) => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.impactAsync(style); },
+  notification: (type) => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.notificationAsync(type); },
 };
 
 // ── Renk Paleti ───────────────────────────────────────────────────────────────
@@ -389,10 +389,10 @@ function runChainMerge(cells, startIdx) {
 const UNDO_COSTS = [1, 3, 10, 25]; // Zamanı Geri Sar katlanarak artar
 const POWER_HC_COST = { blackhole: 5, wormhole: 3, overload: 10 };
 const POWER_DEFS = [
-  { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK',    hcCost: 5,  defaultColor: '#aa44ff' },
-  { id: 'wormhole',  Icon: WormholeIcon,  short: 'SOLUCAN DELİĞİ', hcCost: 3,  defaultColor: '#00ffe0' },
-  { id: 'overload',  Icon: OverloadIcon,  short: 'AŞIRI YÜKLE',   hcCost: 10, defaultColor: '#ffdd00' },
-  { id: 'rewind',    Icon: RewindIcon,    short: 'GERİ SAR',       hcCost: 0,  defaultColor: '#ff3355' },
+  { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK', hcCost: 5, defaultColor: '#aa44ff' },
+  { id: 'wormhole', Icon: WormholeIcon, short: 'SOLUCAN DELİĞİ', hcCost: 3, defaultColor: '#00ffe0' },
+  { id: 'overload', Icon: OverloadIcon, short: 'AŞIRI YÜKLE', hcCost: 10, defaultColor: '#ffdd00' },
+  { id: 'rewind', Icon: RewindIcon, short: 'GERİ SAR', hcCost: 0, defaultColor: '#ff3355' },
 ];
 
 // Undo için anlık oyun durumu snapshot'ı
@@ -448,10 +448,10 @@ const useStore = create(
       hapticsEnabled: true,
       labOpen: false,             // prestij marketi modalı
 
-      setScreen:      (screen) => set({ currentScreen: screen }),
-      toggleSound:    () => set((s) => ({ soundEnabled: !s.soundEnabled })),
-      toggleHaptics:  () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
-      setLabOpen:     (v) => set({ labOpen: v }),
+      setScreen: (screen) => set({ currentScreen: screen }),
+      toggleSound: () => set((s) => ({ soundEnabled: !s.soundEnabled })),
+      toggleHaptics: () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
+      setLabOpen: (v) => set({ labOpen: v }),
 
       addCredits: (amount) => set((s) => ({ credits: s.credits + amount })),
 
@@ -581,7 +581,7 @@ const useStore = create(
             cells: cr.cells,
             nextPieces: newPieces,
             selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, s.hexaCore),
+            gameOver: checkGameOver(cr.cells, s.hexaCore),
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             lastChainEvent: {
@@ -641,7 +641,7 @@ const useStore = create(
           const allCleared = [step0.cleared[0], ...cr.cleared];
           set({
             cells: cr.cells,
-          gameOver: checkGameOver(cr.cells, s.hexaCore),
+            gameOver: checkGameOver(cr.cells, s.hexaCore),
             lockedCells: decrementLocks(lockedCells),
             previousState: snap,
             lastChainEvent: {
@@ -1248,7 +1248,7 @@ function GameOverModal({ visible, onOpenLab }) {
     if (visible) {
       // fadeAnim ve scaleAnim: useNativeDriver false (borderColor JS-side olduğundan tutarlı olmalı)
       Animated.parallel([
-        Animated.timing(fadeAnim,  { toValue: 1, duration: 320, useNativeDriver: false }),
+        Animated.timing(fadeAnim, { toValue: 1, duration: 320, useNativeDriver: false }),
         Animated.spring(scaleAnim, { toValue: 1, speed: 12, bounciness: 10, useNativeDriver: false }),
       ]).start();
       // glowAnim loopunu ayrı başlat (farklı driver karışmasın)
@@ -1279,7 +1279,7 @@ function GameOverModal({ visible, onOpenLab }) {
   });
 
   return (
-    <Modal visible transparent statusBarTranslucent onRequestClose={() => {}}>
+    <Modal visible transparent statusBarTranslucent onRequestClose={() => { }}>
       {/* Karanlık overlay */}
       <Animated.View style={[styles.goOverlay, { opacity: fadeAnim }]}>
         {/* Modal kutu */}
@@ -1796,7 +1796,7 @@ function HexGrid({ onGridMeasure, isDragActive }) {
 function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
   // Border animasyonu: tıklanınca kırmızı flaş → mat griye geri dön
   const borderAnim = useRef(new Animated.Value(0)).current;
-  const flashRef   = useRef(null);
+  const flashRef = useRef(null);
 
   const triggerFlash = useCallback(() => {
     flashRef.current?.stop();
@@ -1819,21 +1819,21 @@ function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
     onPress(def.id);
   }, [canUse, onPress, def.id, triggerFlash]);
 
-  const iconSize   = Math.round(SCREEN_WIDTH * 0.062);
+  const iconSize = Math.round(SCREEN_WIDTH * 0.062);
   // İkon rengi: aktifse beyaz, yetmiyorsa %50 opak asıl renk, yetiyorsa asıl renk
-  const iconColor  = isActive ? '#ffffff' : def.defaultColor;
+  const iconColor = isActive ? '#ffffff' : def.defaultColor;
   const iconOpacity = canAfford ? 1 : 0.45;
 
   // Border rengi: flaş sırasında kırmızı, normal durumda canAfford'a göre
   const animBorderColor = borderAnim.interpolate({
-    inputRange:  [0, 1],
+    inputRange: [0, 1],
     outputRange: [
       isActive ? '#cc44ff' : (canAfford ? '#4422aa' : '#444455'),
       '#ff3355',
     ],
   });
 
-  const costColor   = canAfford ? '#ffffff' : '#ff3355';
+  const costColor = canAfford ? '#ffffff' : '#ff3355';
   const hcIconColor = canAfford ? '#aa44ff' : '#ff3355';
 
   return (
@@ -1857,19 +1857,19 @@ function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
 
 // ── PowerUpBar ────────────────────────────────────────────────────────────────
 function PowerUpBar() {
-  const activePowerUp  = useStore((s) => s.activePowerUp);
+  const activePowerUp = useStore((s) => s.activePowerUp);
   const activatePowerUp = useStore((s) => s.activatePowerUp);
-  const applyRewind    = useStore((s) => s.applyRewind);
-  const cancelPowerUp  = useStore((s) => s.cancelPowerUp);
-  const hexaCore       = useStore((s) => s.hexaCore);
-  const undoCostIdx    = useStore((s) => s.undoCostIdx);
-  const previousState  = useStore((s) => s.previousState);
+  const applyRewind = useStore((s) => s.applyRewind);
+  const cancelPowerUp = useStore((s) => s.cancelPowerUp);
+  const hexaCore = useStore((s) => s.hexaCore);
+  const undoCostIdx = useStore((s) => s.undoCostIdx);
+  const previousState = useStore((s) => s.previousState);
 
   const hcCosts = {
     blackhole: POWER_HC_COST.blackhole,
-    wormhole:  POWER_HC_COST.wormhole,
-    overload:  POWER_HC_COST.overload,
-    rewind:    UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
+    wormhole: POWER_HC_COST.wormhole,
+    overload: POWER_HC_COST.overload,
+    rewind: UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
   };
 
   const handlePress = useCallback((id) => {
@@ -1884,9 +1884,9 @@ function PowerUpBar() {
   return (
     <View style={styles.powerBar}>
       {POWER_DEFS.map((p) => {
-        const cost      = hcCosts[p.id];
+        const cost = hcCosts[p.id];
         const canAfford = hexaCore >= cost;
-        const canUse    = p.id === 'rewind' ? !!previousState && canAfford : canAfford;
+        const canUse = p.id === 'rewind' ? !!previousState && canAfford : canAfford;
         return (
           <PowerUpBtn
             key={p.id}
@@ -1996,12 +1996,12 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
 
 // ── MainMenu ────────────────────────────────────────────────────────────────────
 function MainMenu() {
-  const hexaCore      = useStore((s) => s.hexaCore);
-  const setScreen     = useStore((s) => s.setScreen);
-  const setLabOpen    = useStore((s) => s.setLabOpen);
-  const soundEnabled  = useStore((s) => s.soundEnabled);
+  const hexaCore = useStore((s) => s.hexaCore);
+  const setScreen = useStore((s) => s.setScreen);
+  const setLabOpen = useStore((s) => s.setLabOpen);
+  const soundEnabled = useStore((s) => s.soundEnabled);
   const hapticsEnabled = useStore((s) => s.hapticsEnabled);
-  const toggleSound   = useStore((s) => s.toggleSound);
+  const toggleSound = useStore((s) => s.toggleSound);
   const toggleHaptics = useStore((s) => s.toggleHaptics);
 
   // Başlık için animasyonlu parlama
@@ -2018,7 +2018,7 @@ function MainMenu() {
   }, []);
 
   const titleGlow = glowAnim.interpolate({
-    inputRange:  [0, 1],
+    inputRange: [0, 1],
     outputRange: ['#7722cc', '#dd66ff'],
   });
 
@@ -2056,7 +2056,6 @@ function MainMenu() {
           <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
             HEXANODE
           </Animated.Text>
-          <Text style={menuStyles.logoSub}>DARK NEON PROTOCOL</Text>
           <View style={menuStyles.logoDividerBot} />
         </View>
 
@@ -2126,21 +2125,21 @@ function MainMenu() {
 
 // ── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const collectOffline    = useStore((s) => s.collectOffline);
-  const cells             = useStore((s) => s.cells);
-  const credits           = useStore((s) => s.credits);
-  const uretMaliyeti      = useStore((s) => s.uretMaliyeti);
-  const offlineEarned     = useStore((s) => s.offlineEarned);
+  const collectOffline = useStore((s) => s.collectOffline);
+  const cells = useStore((s) => s.cells);
+  const credits = useStore((s) => s.credits);
+  const uretMaliyeti = useStore((s) => s.uretMaliyeti);
+  const offlineEarned = useStore((s) => s.offlineEarned);
   const offlineCapReached = useStore((s) => s.offlineCapReached);
-  const nextPieces        = useStore((s) => s.nextPieces);
-  const gameOver          = useStore((s) => s.gameOver);
+  const nextPieces = useStore((s) => s.nextPieces);
+  const gameOver = useStore((s) => s.gameOver);
   // Navigasyon + Lab (store'dan)
-  const currentScreen     = useStore((s) => s.currentScreen);
-  const setScreen         = useStore((s) => s.setScreen);
-  const labOpen           = useStore((s) => s.labOpen);
-  const setLabOpen        = useStore((s) => s.setLabOpen);
-  const handleOpenLab     = useCallback(() => setLabOpen(true), [setLabOpen]);
-  const handleCloseLab    = useCallback(() => setLabOpen(false), [setLabOpen]);
+  const currentScreen = useStore((s) => s.currentScreen);
+  const setScreen = useStore((s) => s.setScreen);
+  const labOpen = useStore((s) => s.labOpen);
+  const setLabOpen = useStore((s) => s.setLabOpen);
+  const handleOpenLab = useCallback(() => setLabOpen(true), [setLabOpen]);
+  const handleCloseLab = useCallback(() => setLabOpen(false), [setLabOpen]);
 
   // Sürükleme ghost durumu
   const [ghost, setGhost] = useState({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
@@ -2436,6 +2435,7 @@ const styles = StyleSheet.create({
     fontSize: RFS.btnMain,
     fontWeight: '300',
     letterSpacing: 3.5,
+    textAlign: 'center',
   },
   btnDisabled: {
     borderColor: C.btnDisabledBorder,
@@ -2921,7 +2921,7 @@ const menuStyles = StyleSheet.create({
     paddingVertical: Math.round(SCREEN_WIDTH * 0.06),
   },
   playBtn: {
-    width: '100%',
+    width: '90%',
     borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#9944ff',
@@ -2951,7 +2951,7 @@ const menuStyles = StyleSheet.create({
     marginTop: 4,
   },
   labBtn: {
-    width: '100%',
+    width: '90%',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#3a1a6a',
@@ -2985,6 +2985,8 @@ const menuStyles = StyleSheet.create({
   bottomSection: {
     alignItems: 'center',
     paddingBottom: Math.round(SCREEN_WIDTH * 0.02),
+    marginLeft: Math.round(SCREEN_WIDTH * 0.05),
+    marginRight: Math.round(SCREEN_WIDTH * 0.05),
   },
   settingsLabel: {
     color: '#3a1a6a',
