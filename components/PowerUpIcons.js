@@ -1,5 +1,5 @@
 import React from 'react';
-import Svg, { Path, Circle } from 'react-native-svg';
+import Svg, { Path, Circle, Line, G } from 'react-native-svg';
 
 // ── HexaCore (prestij para birimi) ikonu ─────────────────────────────────────
 export const HexaCoreIcon = ({ size = 16, color = '#aa44ff' }) => (
@@ -70,6 +70,79 @@ export const RewindIcon = ({ size = 32, color = '#ff3355' }) => (
     />
     <Path
       d="M12 7v5l4 2"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+  </Svg>
+);
+
+// ── Ses Açık: hoparlör + dalgalar ─────────────────────────────────────────────
+export const SoundOnIcon = ({ size = 28, color = '#aa44ff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M11 5L6 9H2v6h4l5 4V5z"
+      fill={color} fillOpacity="0.25"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path d="M15.54 8.46a5 5 0 0 1 0 7.07" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    <Path d="M19.07 4.93a10 10 0 0 1 0 14.14" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeOpacity="0.6" />
+  </Svg>
+);
+
+// ── Ses Kapalı: hoparlör + çarpı ──────────────────────────────────────────────
+export const SoundOffIcon = ({ size = 28, color = '#444455' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M11 5L6 9H2v6h4l5 4V5z"
+      fill={color} fillOpacity="0.2"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Line x1="23" y1="9" x2="17" y2="15" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    <Line x1="17" y1="9" x2="23" y2="15" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+  </Svg>
+);
+
+// ── Titreşim Açık: telefon + titreşim çizgileri ────────────────────────────────
+export const VibrationOnIcon = ({ size = 28, color = '#aa44ff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M6 5h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"
+      fill={color} fillOpacity="0.18"
+      stroke={color} strokeWidth="1.8"
+    />
+    <Path d="M2 9v6" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    <Path d="M22 9v6" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    <Path d="M4 11v2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeOpacity="0.6" />
+    <Path d="M20 11v2" stroke={color} strokeWidth="2" strokeLinecap="round" strokeOpacity="0.6" />
+  </Svg>
+);
+
+// ── Titreşim Kapalı: telefon + çarpı ──────────────────────────────────────────
+export const VibrationOffIcon = ({ size = 28, color = '#444455' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M6 5h12a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"
+      fill={color} fillOpacity="0.15"
+      stroke={color} strokeWidth="1.8"
+    />
+    <Line x1="9" y1="9" x2="15" y2="15" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    <Line x1="15" y1="9" x2="9" y2="15" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+  </Svg>
+);
+
+// ── Ev / Ana Menü ikonu ────────────────────────────────────────────────────────
+export const HomeIcon = ({ size = 24, color = '#aa44ff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M3 9.5L12 3l9 6.5V21a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9.5z"
+      fill={color} fillOpacity="0.18"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path
+      d="M9 22V12h6v10"
       stroke={color} strokeWidth="1.8"
       strokeLinecap="round" strokeLinejoin="round"
     />

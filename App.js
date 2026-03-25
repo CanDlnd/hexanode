@@ -19,6 +19,11 @@ import {
   OverloadIcon,
   RewindIcon,
   HexaCoreIcon,
+  SoundOnIcon,
+  SoundOffIcon,
+  VibrationOnIcon,
+  VibrationOffIcon,
+  HomeIcon,
 } from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -47,6 +52,7 @@ async function initAudio() {
 }
 
 async function playSound(type) {
+  if (useStore?.getState()?.soundEnabled === false) return;
   const source = SFX[type];
   if (!source) return;
   try {
@@ -60,6 +66,7 @@ async function playSound(type) {
 
 // Yer değiştirme (swap) için hafif swoosh sesi
 async function playSwapSound() {
+  if (useStore?.getState()?.soundEnabled === false) return;
   const source = SFX.spawn;
   if (!source) return;
   try {
@@ -77,6 +84,7 @@ async function playSwapSound() {
 
 // Kombo zinciri için yükselen pitch/hız ile merge sesi
 async function playMergeWithRate(rate = 1.0) {
+  if (useStore?.getState()?.soundEnabled === false) return;
   const source = SFX.merge;
   if (!source) return;
   try {
@@ -91,6 +99,12 @@ async function playMergeWithRate(rate = 1.0) {
     });
   } catch (_) { }
 }
+
+// Titreşim-güvenli sarmalayıcı: hapticsEnabled false ise çalışmaz
+const safeHaptic = {
+  impact:       (style) => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.impactAsync(style); },
+  notification: (type)  => { if (useStore?.getState()?.hapticsEnabled !== false) Haptics.notificationAsync(type); },
+};
 
 // ── Renk Paleti ───────────────────────────────────────────────────────────────
 const C = {
@@ -428,6 +442,16 @@ const useStore = create(
       // ── Prestij state ───────────────────────────────────────────────────────
       hexaCore: 50,               // kalıcı prestij para birimi (başlangıç hediyesi)
       prestigeUpgrades: { dataFlow: 0, richStart: 0, advancedNode: 0 },
+      // ── Navigasyon + Global Ayarlar ─────────────────────────────────────────
+      currentScreen: 'MENU',     // 'MENU' | 'GAME'
+      soundEnabled: true,
+      hapticsEnabled: true,
+      labOpen: false,             // prestij marketi modalı
+
+      setScreen:      (screen) => set({ currentScreen: screen }),
+      toggleSound:    () => set((s) => ({ soundEnabled: !s.soundEnabled })),
+      toggleHaptics:  () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
+      setLabOpen:     (v) => set({ labOpen: v }),
 
       addCredits: (amount) => set((s) => ({ credits: s.credits + amount })),
 
@@ -863,7 +887,7 @@ const useStore = create(
       },
     }),
     {
-      name: 'hexanode-storage-v8',
+      name: 'hexanode-storage-v9',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         cells: s.cells,
@@ -877,6 +901,8 @@ const useStore = create(
         undoCostIdx: s.undoCostIdx,
         hexaCore: s.hexaCore,
         prestigeUpgrades: s.prestigeUpgrades,
+        soundEnabled: s.soundEnabled,
+        hapticsEnabled: s.hapticsEnabled,
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) return;
@@ -1130,13 +1156,13 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onD
         } else if (res.result === 'merged') {
           hardReset();
           // Direkt birleşme: orta şiddet haptik; ses DyingNodesLayer'dan gelir
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+          safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
           cbRef.current.onDragEnd();
         } else if (res.result === 'swapped') {
           hardReset();
           // Yer değiştirme: swoosh ses + hafif haptik + pulse
           playSwapSound();
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
           Animated.sequence([
             Animated.spring(scaleAnim, { toValue: 1.20, speed: 90, bounciness: 4, useNativeDriver: false }),
             Animated.spring(scaleAnim, { toValue: 1, speed: 40, bounciness: 10, useNativeDriver: false }),
@@ -1298,7 +1324,7 @@ function GameOverModal({ visible, onOpenLab }) {
             <TouchableOpacity
               style={styles.goRestartBtn}
               onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                safeHaptic.impact(Haptics.ImpactFeedbackStyle.Heavy);
                 collectPrestigeAndReset();
               }}
               activeOpacity={0.82}
@@ -1309,7 +1335,7 @@ function GameOverModal({ visible, onOpenLab }) {
             <TouchableOpacity
               style={styles.goLabBtn}
               onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
                 onOpenLab();
               }}
               activeOpacity={0.82}
@@ -1392,8 +1418,8 @@ function LabModal({ visible, onClose }) {
                   disabled={isMaxed}
                   onPress={() => {
                     const res = buyPrestigeUpgrade(upg.id);
-                    if (res.ok) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                    if (res.ok) safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+                    else safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
                   }}
                   activeOpacity={0.75}
                 >
@@ -1574,7 +1600,7 @@ function DyingNodesLayer({ onMerge }) {
 
         // Yükselen pitch ile merge sesi
         playMergeWithRate(Math.min(1.0 + stepIdx * 0.13, 1.65));
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
       }, stepIdx * STEP_DELAY);
     });
 
@@ -1785,7 +1811,7 @@ function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
 
   const handleTap = useCallback(() => {
     if (!canUse) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
       playSound('error');
       triggerFlash();
       return;
@@ -1895,7 +1921,7 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
       onPanResponderGrant: (evt, gs) => {
         const { canDrag: cd, pieceIdx: pi, value: val, onDragStart: ds } = cbRef.current;
         if (!cd) {
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
           playSound('error');
           return;
         }
@@ -1968,25 +1994,164 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
   );
 }
 
+// ── MainMenu ────────────────────────────────────────────────────────────────────
+function MainMenu() {
+  const hexaCore      = useStore((s) => s.hexaCore);
+  const setScreen     = useStore((s) => s.setScreen);
+  const setLabOpen    = useStore((s) => s.setLabOpen);
+  const soundEnabled  = useStore((s) => s.soundEnabled);
+  const hapticsEnabled = useStore((s) => s.hapticsEnabled);
+  const toggleSound   = useStore((s) => s.toggleSound);
+  const toggleHaptics = useStore((s) => s.toggleHaptics);
+
+  // Başlık için animasyonlu parlama
+  const glowAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, { toValue: 1, duration: 1800, useNativeDriver: false }),
+        Animated.timing(glowAnim, { toValue: 0, duration: 1800, useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+
+  const titleGlow = glowAnim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: ['#7722cc', '#dd66ff'],
+  });
+
+  const handlePlay = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+    setScreen('GAME');
+  };
+
+  const handleLab = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    setScreen('GAME');
+    setLabOpen(true);
+  };
+
+  const handleToggleSound = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    toggleSound();
+  };
+
+  const handleToggleHaptics = () => {
+    // Haptik kapat/aç için — kapatmadan önce son bir titreşim ver
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    toggleHaptics();
+  };
+
+  return (
+    <SafeAreaView style={menuStyles.root}>
+      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {/* ── Üst: Logo + HexaCore ─────────────────────────────────────── */}
+      <View style={menuStyles.topSection}>
+        <View style={menuStyles.logoWrap}>
+          {/* Arka plan dekor çizgisi */}
+          <View style={menuStyles.logoDividerTop} />
+          <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
+            HEXANODE
+          </Animated.Text>
+          <Text style={menuStyles.logoSub}>DARK NEON PROTOCOL</Text>
+          <View style={menuStyles.logoDividerBot} />
+        </View>
+
+        <View style={menuStyles.hcRow}>
+          <HexaCoreIcon size={20} color="#aa44ff" />
+          <Text style={menuStyles.hcVal}>{hexaCore}</Text>
+          <Text style={menuStyles.hcLabel}> HexaCore</Text>
+        </View>
+      </View>
+
+      {/* ── Orta: Ana Butonlar ───────────────────────────────────────── */}
+      <View style={menuStyles.midSection}>
+        <TouchableOpacity style={menuStyles.playBtn} onPress={handlePlay} activeOpacity={0.82}>
+          <View style={menuStyles.playBtnInner}>
+            <Text style={menuStyles.playBtnText}>SİSTEME GİRİŞ</Text>
+            <Text style={menuStyles.playBtnSub}>O Y N A</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={menuStyles.labBtn} onPress={handleLab} activeOpacity={0.82}>
+          <Text style={menuStyles.labBtnText}>LABORATUVAR</Text>
+          <View style={menuStyles.labBtnHcRow}>
+            <HexaCoreIcon size={14} color="#aa44ff" />
+            <Text style={menuStyles.labBtnSub}> Prestij Marketi</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* ── Alt: Ayarlar ─────────────────────────────────────────────── */}
+      <View style={menuStyles.bottomSection}>
+        <Text style={menuStyles.settingsLabel}>A Y A R L A R</Text>
+        <View style={menuStyles.toggleRow}>
+
+          {/* Ses Toggleu */}
+          <TouchableOpacity
+            style={[menuStyles.toggleBtn, soundEnabled && menuStyles.toggleBtnOn]}
+            onPress={handleToggleSound}
+            activeOpacity={0.78}
+          >
+            {soundEnabled
+              ? <SoundOnIcon size={30} color="#aa44ff" />
+              : <SoundOffIcon size={30} color="#444455" />}
+            <Text style={[menuStyles.toggleLabel, soundEnabled ? menuStyles.toggleLabelOn : menuStyles.toggleLabelOff]}>
+              {soundEnabled ? 'SES AÇIK' : 'SES KAPALI'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Titreşim Toggleu */}
+          <TouchableOpacity
+            style={[menuStyles.toggleBtn, hapticsEnabled && menuStyles.toggleBtnOn]}
+            onPress={handleToggleHaptics}
+            activeOpacity={0.78}
+          >
+            {hapticsEnabled
+              ? <VibrationOnIcon size={30} color="#aa44ff" />
+              : <VibrationOffIcon size={30} color="#444455" />}
+            <Text style={[menuStyles.toggleLabel, hapticsEnabled ? menuStyles.toggleLabelOn : menuStyles.toggleLabelOff]}>
+              {hapticsEnabled ? 'TİTREŞİM AÇIK' : 'TİTREŞİM KAPALI'}
+            </Text>
+          </TouchableOpacity>
+
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
 // ── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const collectOffline = useStore((s) => s.collectOffline);
-  const cells = useStore((s) => s.cells);
-  const credits = useStore((s) => s.credits);
-  const uretMaliyeti = useStore((s) => s.uretMaliyeti);
-  const offlineEarned = useStore((s) => s.offlineEarned);
+  const collectOffline    = useStore((s) => s.collectOffline);
+  const cells             = useStore((s) => s.cells);
+  const credits           = useStore((s) => s.credits);
+  const uretMaliyeti      = useStore((s) => s.uretMaliyeti);
+  const offlineEarned     = useStore((s) => s.offlineEarned);
   const offlineCapReached = useStore((s) => s.offlineCapReached);
-  const nextPieces = useStore((s) => s.nextPieces);
-  const gameOver = useStore((s) => s.gameOver);
+  const nextPieces        = useStore((s) => s.nextPieces);
+  const gameOver          = useStore((s) => s.gameOver);
+  // Navigasyon + Lab (store'dan)
+  const currentScreen     = useStore((s) => s.currentScreen);
+  const setScreen         = useStore((s) => s.setScreen);
+  const labOpen           = useStore((s) => s.labOpen);
+  const setLabOpen        = useStore((s) => s.setLabOpen);
+  const handleOpenLab     = useCallback(() => setLabOpen(true), [setLabOpen]);
+  const handleCloseLab    = useCallback(() => setLabOpen(false), [setLabOpen]);
 
   // Sürükleme ghost durumu
   const [ghost, setGhost] = useState({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
   const dragPieceIdxRef = useRef(null);
   const gridAbsPos = useRef({ x: 0, y: 0 });
-  // Lab (Prestij Marketi) modalı
-  const [labOpen, setLabOpen] = useState(false);
-  const handleOpenLab = useCallback(() => setLabOpen(true), []);
-  const handleCloseLab = useCallback(() => setLabOpen(false), []);
+
+  // Menüye dön (onay olmadan; üstte küçük buton)
+  const handleGoMenu = useCallback(() => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    setScreen('MENU');
+  }, [setScreen]);
 
   const modalVisible = offlineEarned != null && offlineEarned > 0;
   const canDrag = true; // TEST: kredi sınırı kapalı
@@ -2041,14 +2206,17 @@ export default function App() {
     if (cellIdx === -1) return;
     const result = useStore.getState().spawnFromPreview(pi, cellIdx);
     if (result.ok) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
       playSound(result.merged ? 'merge' : 'spawn');
     } else {
       // wrongValue, locked veya başka geçersiz durum → hata
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
       playSound('error');
     }
   }, []);
+
+  // Ana Menü ekranını göster
+  if (currentScreen === 'MENU') return <MainMenu />;
 
   return (
     <SafeAreaView style={styles.root}>
@@ -2086,7 +2254,17 @@ export default function App() {
 
       {/* Başlık */}
       <View style={styles.header}>
-        <Text style={styles.titleMain}>HEXANODE</Text>
+        <View style={styles.headerTitleRow}>
+          <TouchableOpacity
+            style={styles.homeBtn}
+            onPress={handleGoMenu}
+            activeOpacity={0.75}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <HomeIcon size={22} color="#aa44ff" />
+          </TouchableOpacity>
+          <Text style={styles.titleMain}>HEXANODE</Text>
+        </View>
         <EconDisplay onOpenLab={handleOpenLab} />
       </View>
 
@@ -2152,6 +2330,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     paddingBottom: 28,
+  },
+  headerTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  homeBtn: {
+    padding: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a1a6a',
+    backgroundColor: '#12062a',
   },
   titleMain: {
     color: C.titlePrimary,
@@ -2651,5 +2841,185 @@ const styles = StyleSheet.create({
     fontSize: Math.round(SCREEN_WIDTH * 0.028),
     fontWeight: '300',
     marginTop: 1,
+  },
+});
+
+// ── MainMenu Stilleri ────────────────────────────────────────────────────────
+const menuStyles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: C.bg,
+    justifyContent: 'space-between',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  // ── Üst: Logo ────────────────────────────────────────────────────────────
+  topSection: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: Math.round(SCREEN_WIDTH * 0.04),
+  },
+  logoWrap: {
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  logoDividerTop: {
+    width: Math.round(SCREEN_WIDTH * 0.55),
+    height: 1,
+    backgroundColor: '#3a1a6a',
+    marginBottom: 16,
+  },
+  logoText: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.145),
+    fontWeight: '100',
+    letterSpacing: Math.round(SCREEN_WIDTH * 0.018),
+    textShadowColor: '#aa44ff',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
+  },
+  logoSub: {
+    color: '#4a2a7a',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+    letterSpacing: 5,
+    marginTop: 6,
+  },
+  logoDividerBot: {
+    width: Math.round(SCREEN_WIDTH * 0.55),
+    height: 1,
+    backgroundColor: '#3a1a6a',
+    marginTop: 16,
+  },
+  hcRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#0f0625',
+    borderWidth: 1,
+    borderColor: '#2a1050',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  hcVal: {
+    color: '#dd88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.042),
+    fontWeight: '300',
+    letterSpacing: 1,
+  },
+  hcLabel: {
+    color: '#6644aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontWeight: '200',
+    letterSpacing: 2,
+  },
+  // ── Orta: Butonlar ───────────────────────────────────────────────────────
+  midSection: {
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  playBtn: {
+    width: '100%',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#9944ff',
+    backgroundColor: '#1a0535',
+    overflow: 'hidden',
+    shadowColor: '#aa44ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  playBtnInner: {
+    alignItems: 'center',
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.055),
+  },
+  playBtnText: {
+    color: '#ffffff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.052),
+    fontWeight: '300',
+    letterSpacing: 7,
+  },
+  playBtnSub: {
+    color: '#7733cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '200',
+    letterSpacing: 10,
+    marginTop: 4,
+  },
+  labBtn: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3a1a6a',
+    backgroundColor: '#0f0625',
+    alignItems: 'center',
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.038),
+    shadowColor: '#6600aa',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  labBtnText: {
+    color: '#cc88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.040),
+    fontWeight: '200',
+    letterSpacing: 6,
+  },
+  labBtnHcRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 5,
+  },
+  labBtnSub: {
+    color: '#5533aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '200',
+    letterSpacing: 2,
+  },
+  // ── Alt: Ayarlar ─────────────────────────────────────────────────────────
+  bottomSection: {
+    alignItems: 'center',
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.02),
+  },
+  settingsLabel: {
+    color: '#3a1a6a',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '300',
+    letterSpacing: 6,
+    marginBottom: 14,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  toggleBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#222233',
+    backgroundColor: '#0b0520',
+    gap: 6,
+  },
+  toggleBtnOn: {
+    borderColor: '#4a1a8a',
+    backgroundColor: '#120835',
+  },
+  toggleLabel: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '300',
+    letterSpacing: 2,
+  },
+  toggleLabelOn: {
+    color: '#8844cc',
+  },
+  toggleLabelOff: {
+    color: '#333355',
   },
 });
