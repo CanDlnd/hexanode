@@ -323,6 +323,37 @@ function runChainMerge(cells, startIdx) {
   return { cells: cur, steps, cleared: allCleared, chainDepth: steps.length, mergedAt: pos, id };
 }
 
+// ── Power-up sabitleri ────────────────────────────────────────────────────────
+const UNDO_COSTS = [1000, 5000, 50000, 1_000_000];
+const POWER_DEFS = [
+  { id: 'blackhole', icon: '⚫', short: 'KARA DELİK',   costMult: 5  },
+  { id: 'wormhole',  icon: '🌀', short: 'SOLUCAN DELİĞİ', costMult: 3  },
+  { id: 'overload',  icon: '⚡', short: 'AŞIRI YÜKLE',  costMult: 10 },
+  { id: 'rewind',    icon: '↩',  short: 'GERİ SAR',     costMult: 0  }, // cost = UNDO_COSTS
+];
+
+// Undo için anlık oyun durumu snapshot'ı
+function makeSnap(s) {
+  return {
+    cells: [...s.cells],
+    credits: s.credits,
+    uretMaliyeti: s.uretMaliyeti,
+    nextPieces: [...s.nextPieces],
+    selectedPieceIdx: s.selectedPieceIdx,
+    lockedCells: { ...s.lockedCells },
+  };
+}
+
+// Her hamle sonrası kilit sayacını azalt
+function decrementLocks(lockedCells) {
+  const next = {};
+  Object.entries(lockedCells).forEach(([k, v]) => {
+    if (v > 1) next[k] = v - 1;
+    // v === 1: kilit kalktı, ekleme
+  });
+  return next;
+}
+
 // ── Zustand Store ──────────────────────────────────────────────────────────────
 const useStore = create(
   persist(
@@ -338,6 +369,13 @@ const useStore = create(
       selectedPieceIdx: 0,
       gameOver: false,
       lastChainEvent: null,
+      // ── Power-up state ──────────────────────────────────────────────────────
+      activePowerUp: null,        // 'blackhole' | 'wormhole' | 'overload' | 'rewind' | null
+      wormholeFirstIdx: null,     // wormhole için ilk seçilen hücre
+      lockedCells: {},            // { [cellIdx]: kalan hamle sayısı }
+      undoCostIdx: 0,             // UNDO_COSTS dizisindeki pozisyon
+      previousState: null,        // son hamle öncesi snapshot (undo için)
+      lastOverloadEvent: null,    // { cellIdx, exploded, id }
 
       addCredits: (amount) => set((s) => ({ credits: s.credits + amount })),
 
@@ -430,24 +468,24 @@ const useStore = create(
       },
 
       // Preview alanından direkt sürüklenerek bırakma
-      // Kredi kontrolü burada yapılır; yetersizse { ok:false, noCredits:true }
       spawnFromPreview: (pieceIdx, cellIdx) => {
-        const { cells, credits, uretMaliyeti, nextPieces } = get();
-        if (cells[cellIdx] !== null) return { ok: false };
-        // if (credits < uretMaliyeti) return { ok: false, noCredits: true }; // TEST: kredi sınırı kapalı
-        const valueToPlace = nextPieces[pieceIdx];
-        const placed = [...cells];
+        const s = get();
+        if (s.cells[cellIdx] !== null) return { ok: false };
+        if (s.lockedCells[cellIdx]) return { ok: false, locked: true };
+        const snap = makeSnap(s);
+        const valueToPlace = s.nextPieces[pieceIdx];
+        const placed = [...s.cells];
         placed[cellIdx] = { value: valueToPlace };
         const cr = runChainMerge(placed, cellIdx);
-        const newPieces = [...nextPieces];
+        const newPieces = [...s.nextPieces];
         newPieces[pieceIdx] = pickNextValue();
         set({
           cells: cr.cells,
-          credits: credits - uretMaliyeti,
-          uretMaliyeti: Math.ceil(uretMaliyeti * 1.08),
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
           gameOver: checkGameOver(cr.cells),
+          lockedCells: decrementLocks(s.lockedCells),
+          previousState: snap,
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
@@ -460,41 +498,39 @@ const useStore = create(
       //  • Dolu, aynı değer   → Direkt birleştir (MERGE) + zincir kontrol
       //  • Dolu, farklı değer → Yer değiştir (SWAP) + her iki konumdan zincir kontrol
       resolveDrop: (fromIdx, toIdx) => {
-        const { cells } = get();
+        const s = get();
+        const { cells, lockedCells } = s;
         if (fromIdx === toIdx) return { result: 'snap' };
         const src = cells[fromIdx];
         const dst = cells[toIdx];
         if (!src) return { result: 'snap' };
+        // Kilitli hücrelere dokunma yasak
+        if (lockedCells[fromIdx] || lockedCells[toIdx]) return { result: 'snap' };
 
         // Boş hücreye bırakma artık yasak — taş yerine geri döner
         if (!dst) return { result: 'snap' };
 
+        const snap = makeSnap(s);
+
         if (dst.value === src.value) {
-          // Aynı değer → direkt birleştir, sonra zincir devam edebilir
           const merged = [...cells];
           merged[fromIdx] = null;
           merged[toIdx] = { value: dst.value * 2 };
           const cr = runChainMerge(merged, toIdx);
-          // İlk birleşme adımını manuel olarak öne ekle (animasyon için)
           const step0 = {
             cleared: [{ fromIdx, toIdx, value: src.value }],
-            fromIdx,
-            toIdx,
-            mergedAt: toIdx,
-            waveIdx: 0,
-            travel: true,
+            fromIdx, toIdx, mergedAt: toIdx, waveIdx: 0, travel: true,
           };
-          const allSteps = [step0, ...cr.steps.map((s, i) => ({ ...s, waveIdx: i + 1 }))];
+          const allSteps = [step0, ...cr.steps.map((st, i) => ({ ...st, waveIdx: i + 1 }))];
           const allCleared = [step0.cleared[0], ...cr.cleared];
           set({
             cells: cr.cells,
             gameOver: checkGameOver(cr.cells),
+            lockedCells: decrementLocks(lockedCells),
+            previousState: snap,
             lastChainEvent: {
-              steps: allSteps,
-              cleared: allCleared,
-              finalMergedAt: cr.mergedAt,
-              chainDepth: allSteps.length,
-              id: cr.id,
+              steps: allSteps, cleared: allCleared,
+              finalMergedAt: cr.mergedAt, chainDepth: allSteps.length, id: cr.id,
             },
           });
           return { result: 'merged', chainDepth: allSteps.length };
@@ -508,7 +544,7 @@ const useStore = create(
         const chain2 = runChainMerge(chain1.cells, fromIdx);
         const allSteps = [
           ...chain1.steps,
-          ...chain2.steps.map((s, i) => ({ ...s, waveIdx: chain1.steps.length + i })),
+          ...chain2.steps.map((st, i) => ({ ...st, waveIdx: chain1.steps.length + i })),
         ];
         const allCleared = [...chain1.cleared, ...chain2.cleared];
         const totalDepth = allSteps.length;
@@ -516,11 +552,151 @@ const useStore = create(
         set({
           cells: chain2.cells,
           gameOver: checkGameOver(chain2.cells),
+          lockedCells: decrementLocks(lockedCells),
+          previousState: snap,
           lastChainEvent: allSteps.length > 0
             ? { steps: allSteps, cleared: allCleared, finalMergedAt: primaryMergedAt, chainDepth: totalDepth, id: chain1.id }
             : null,
         });
         return { result: 'swapped', chainDepth: totalDepth };
+      },
+
+      // ── Power-up aksiyonları ────────────────────────────────────────────────
+      activatePowerUp: (type) => {
+        const { activePowerUp } = get();
+        // Aynı butona tekrar bas → iptal
+        set({
+          activePowerUp: activePowerUp === type ? null : type,
+          wormholeFirstIdx: null,
+        });
+      },
+
+      cancelPowerUp: () => set({ activePowerUp: null, wormholeFirstIdx: null }),
+
+      // Kara Delik: hücreyi sil + 3 hamle kilitle
+      applyBlackHole: (cellIdx) => {
+        const s = get();
+        if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
+        const cost = s.uretMaliyeti * 5;
+        const snap = makeSnap(s);
+        const newCells = [...s.cells];
+        newCells[cellIdx] = null;
+        set({
+          cells: newCells,
+          credits: s.credits - cost,
+          lockedCells: { ...s.lockedCells, [cellIdx]: 3 },
+          previousState: snap,
+          activePowerUp: null,
+          gameOver: checkGameOver(newCells),
+          lastChainEvent: null,
+        });
+        return { ok: true };
+      },
+
+      // Solucan Deliği: 2 hücreyi seç → komşuluksuz swap + zincir x2 bonus
+      applyWormhole: (cellIdx) => {
+        const s = get();
+        if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
+        if (s.wormholeFirstIdx === null) {
+          set({ wormholeFirstIdx: cellIdx });
+          return { ok: 'first' };
+        }
+        if (s.wormholeFirstIdx === cellIdx) {
+          set({ wormholeFirstIdx: null });
+          return { ok: 'deselect' };
+        }
+        const first = s.wormholeFirstIdx;
+        if (s.lockedCells[first]) return { ok: false };
+        const cost = s.uretMaliyeti * 3;
+        const snap = makeSnap(s);
+        const swapped = [...s.cells];
+        swapped[cellIdx] = s.cells[first];
+        swapped[first] = s.cells[cellIdx];
+        const chain1 = runChainMerge(swapped, cellIdx);
+        const chain2 = runChainMerge(chain1.cells, first);
+        const allSteps = [
+          ...chain1.steps,
+          ...chain2.steps.map((st, i) => ({ ...st, waveIdx: chain1.steps.length + i })),
+        ];
+        const allCleared = [...chain1.cleared, ...chain2.cleared];
+        const totalDepth = allSteps.length;
+        const chainTriggered = totalDepth > 0;
+        const bonusCredits = chainTriggered ? totalDepth * s.uretMaliyeti * 2 : 0;
+        const primaryMergedAt = chain1.steps.length >= chain2.steps.length ? chain1.mergedAt : chain2.mergedAt;
+        set({
+          cells: chain2.cells,
+          credits: s.credits - cost + bonusCredits,
+          lockedCells: decrementLocks(s.lockedCells),
+          previousState: snap,
+          activePowerUp: null,
+          wormholeFirstIdx: null,
+          gameOver: checkGameOver(chain2.cells),
+          lastChainEvent: allSteps.length > 0
+            ? { steps: allSteps, cleared: allCleared, finalMergedAt: primaryMergedAt, chainDepth: totalDepth, id: chain1.id }
+            : null,
+        });
+        return { ok: true, chainTriggered, bonusCredits };
+      },
+
+      // Aşırı Yükleme: %70 bir üst seviye, %30 patlama
+      applyOverload: (cellIdx) => {
+        const s = get();
+        if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
+        const cost = s.uretMaliyeti * 10;
+        const snap = makeSnap(s);
+        const id = Date.now() + Math.random();
+        if (Math.random() < 0.7) {
+          // Başarı: bir üst seviye + zincir kontrol
+          const boosted = [...s.cells];
+          boosted[cellIdx] = { value: s.cells[cellIdx].value * 2 };
+          const cr = runChainMerge(boosted, cellIdx);
+          set({
+            cells: cr.cells,
+            credits: s.credits - cost,
+            lockedCells: decrementLocks(s.lockedCells),
+            previousState: snap,
+            activePowerUp: null,
+            gameOver: checkGameOver(cr.cells),
+            lastChainEvent: cr.steps.length > 0
+              ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
+              : null,
+            lastOverloadEvent: { cellIdx, exploded: false, id },
+          });
+          return { ok: true, exploded: false };
+        } else {
+          // Patlama: hücre yok olur
+          const exploded = [...s.cells];
+          exploded[cellIdx] = null;
+          set({
+            cells: exploded,
+            credits: s.credits - cost,
+            lockedCells: decrementLocks(s.lockedCells),
+            previousState: snap,
+            activePowerUp: null,
+            gameOver: checkGameOver(exploded),
+            lastChainEvent: null,
+            lastOverloadEvent: { cellIdx, exploded: true, id },
+          });
+          return { ok: true, exploded: true };
+        }
+      },
+
+      // Zamanı Geri Sar: son hamleyi geri al (maliyet katlanarak artar)
+      applyRewind: () => {
+        const s = get();
+        if (!s.previousState) return { ok: false };
+        const costIdx = Math.min(s.undoCostIdx, UNDO_COSTS.length - 1);
+        set({
+          ...s.previousState,
+          undoCostIdx: costIdx + 1,
+          previousState: null,
+          activePowerUp: null,
+          wormholeFirstIdx: null,
+          lastChainEvent: null,
+          lastOverloadEvent: null,
+          gameOver: false,
+        });
+        return { ok: true };
       },
 
       resetGame: () => {
@@ -534,11 +710,17 @@ const useStore = create(
           offlineEarned: null,
           offlineCapReached: false,
           lastLogin: Date.now(),
+          activePowerUp: null,
+          wormholeFirstIdx: null,
+          lockedCells: {},
+          undoCostIdx: 0,
+          previousState: null,
+          lastOverloadEvent: null,
         });
       },
     }),
     {
-      name: 'hexanode-storage-v5',
+      name: 'hexanode-storage-v6',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         cells: s.cells,
@@ -548,6 +730,8 @@ const useStore = create(
         nextPieces: s.nextPieces,
         selectedPieceIdx: s.selectedPieceIdx,
         gameOver: s.gameOver,
+        lockedCells: s.lockedCells,
+        undoCostIdx: s.undoCostIdx,
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) return;
@@ -710,7 +894,7 @@ function NodeHex({ value }) {
 }
 
 // ── DraggableNode ─────────────────────────────────────────────────────────────
-function DraggableNode({ cellIndex, value, isDragging, justMerged, onDragStart, onDragEnd, onMergedAtIdx }) {
+function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onDragStart, onDragEnd, onMergedAtIdx }) {
   const { cx, cy } = CELLS[cellIndex];
 
   const mounted = useRef(true);
@@ -738,8 +922,8 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, onDragStart, 
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const cbRef = useRef({ onDragStart, onDragEnd, onMergedAtIdx });
-  cbRef.current = { onDragStart, onDragEnd, onMergedAtIdx };
+  const cbRef = useRef({ onDragStart, onDragEnd, onMergedAtIdx, isLocked });
+  cbRef.current = { onDragStart, onDragEnd, onMergedAtIdx, isLocked };
 
   const snapBack = useCallback(() => {
     Animated.spring(pan, { toValue: { x: 0, y: 0 }, tension: 150, friction: 10, useNativeDriver: false })
@@ -755,10 +939,11 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, onDragStart, 
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => !cbRef.current.isLocked,
+      onMoveShouldSetPanResponder: () => !cbRef.current.isLocked,
 
       onPanResponderGrant: () => {
+        if (cbRef.current.isLocked) return;
         pan.stopAnimation();
         pan.flattenOffset();
         pan.setValue({ x: 0, y: 0 });
@@ -856,6 +1041,13 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, onDragStart, 
             />
           </Svg>
         </Animated.View>
+        {/* Kilitli hücre overlay */}
+        {isLocked > 0 && (
+          <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.lockedOverlay]}>
+            <Text style={styles.lockedIcon}>⛓</Text>
+            <Text style={styles.lockedCount}>{isLocked}</Text>
+          </View>
+        )}
       </Animated.View>
     </Animated.View>
   );
@@ -967,6 +1159,62 @@ const COMBO_TEXT_STYLE = {
   letterSpacing: 1,
 };
 
+// ── ExplosionNode: Aşırı Yükleme patlaması için kırmızı patlama efekti ────────
+function ExplosionNode({ cellIdx, onDone }) {
+  const { cx, cy } = CELLS[cellIdx];
+  const scale = useRef(new Animated.Value(0.4)).current;
+  const opacity = useRef(new Animated.Value(0.9)).current;
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(scale, { toValue: 2.6, duration: 400, useNativeDriver: false }),
+      Animated.timing(opacity, { toValue: 0, duration: 370, useNativeDriver: false }),
+    ]).start(onDone);
+  }, []);
+  const size = HEX_W * 1.1;
+  return (
+    <Animated.View pointerEvents="none" style={{
+      position: 'absolute',
+      left: cx - size / 2,
+      top: cy - HEX_R * 1.1,
+      width: size, height: size,
+      zIndex: 90, opacity,
+      transform: [{ scale }],
+    }}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <Polygon
+          points={hexPoints(size / 2, size * 0.47, DRAW_R * 0.85)}
+          fill="#ff2200" stroke="#ffaa00" strokeWidth={3}
+        />
+      </Svg>
+    </Animated.View>
+  );
+}
+
+// ── ExplosionLayer: lastOverloadEvent'e göre patlama render eder ─────────────
+function ExplosionLayer() {
+  const lastOverloadEvent = useStore((s) => s.lastOverloadEvent);
+  const [activeExplosions, setActiveExplosions] = useState([]);
+  const seenId = useRef(null);
+  useEffect(() => {
+    if (!lastOverloadEvent || lastOverloadEvent.id === seenId.current) return;
+    if (!lastOverloadEvent.exploded) return; // Başarılı yükseltme = farklı efekt
+    seenId.current = lastOverloadEvent.id;
+    const uid = lastOverloadEvent.id;
+    setActiveExplosions((prev) => [...prev, { ...lastOverloadEvent, uid }]);
+  }, [lastOverloadEvent]);
+  return (
+    <>
+      {activeExplosions.map((ev) => (
+        <ExplosionNode
+          key={ev.uid}
+          cellIdx={ev.cellIdx}
+          onDone={() => setActiveExplosions((prev) => prev.filter((x) => x.uid !== ev.uid))}
+        />
+      ))}
+    </>
+  );
+}
+
 // onMerge(mergedAt): birleşme merkezi hücresi için parent'a bildirim (glow için)
 // Her step ~180ms arayla sırayla oynatılır → fermuar/domino animasyonu
 function DyingNodesLayer({ onMerge }) {
@@ -1061,6 +1309,13 @@ function DyingNodesLayer({ onMerge }) {
 // ── HexGrid ───────────────────────────────────────────────────────────────────
 function HexGrid({ onGridMeasure, isDragActive }) {
   const cells = useStore((s) => s.cells);
+  const activePowerUp = useStore((s) => s.activePowerUp);
+  const wormholeFirstIdx = useStore((s) => s.wormholeFirstIdx);
+  const lockedCells = useStore((s) => s.lockedCells);
+  const applyBlackHole = useStore((s) => s.applyBlackHole);
+  const applyWormhole = useStore((s) => s.applyWormhole);
+  const applyOverload = useStore((s) => s.applyOverload);
+
   const [draggingIdx, setDraggingIdx] = useState(null);
   const [mergedCellIdx, setMergedCellIdx] = useState(null);
   const gridViewRef = useRef(null);
@@ -1068,6 +1323,15 @@ function HexGrid({ onGridMeasure, isDragActive }) {
   const handleDragStart = useCallback((idx) => setDraggingIdx(idx), []);
   const handleDragEnd = useCallback(() => setDraggingIdx(null), []);
   const handleChainMerge = useCallback((mergedAt) => setMergedCellIdx(mergedAt), []);
+
+  // Power-up aktifken dolu hücreye dokunma
+  const handlePowerUpCellTap = useCallback((idx) => {
+    if (activePowerUp === 'blackhole') applyBlackHole(idx);
+    else if (activePowerUp === 'wormhole') applyWormhole(idx);
+    else if (activePowerUp === 'overload') applyOverload(idx);
+  }, [activePowerUp, applyBlackHole, applyWormhole, applyOverload]);
+
+  const needsPowerTap = activePowerUp === 'blackhole' || activePowerUp === 'wormhole' || activePowerUp === 'overload';
 
   // Grid'in ekrandaki mutlak konumunu ölç ve App'e bildir
   const measureGrid = useCallback(() => {
@@ -1119,6 +1383,20 @@ function HexGrid({ onGridMeasure, isDragActive }) {
             />
           );
         })}
+        {/* Wormhole ilk seçim vurgusu */}
+        {wormholeFirstIdx !== null && CELLS[wormholeFirstIdx] && (() => {
+          const { cx, cy } = CELLS[wormholeFirstIdx];
+          return (
+            <Polygon
+              key="wormhole-first"
+              points={hexPoints(cx, cy, DRAW_R + 5)}
+              fill="none"
+              stroke="#00eeff"
+              strokeWidth={3}
+              opacity={0.9}
+            />
+          );
+        })()}
       </Svg>
 
       {cells.map((cell, idx) =>
@@ -1129,6 +1407,7 @@ function HexGrid({ onGridMeasure, isDragActive }) {
             value={cell.value}
             isDragging={draggingIdx === idx}
             justMerged={mergedCellIdx === idx}
+            isLocked={lockedCells[idx] || 0}
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
             onMergedAtIdx={setMergedCellIdx}
@@ -1136,7 +1415,82 @@ function HexGrid({ onGridMeasure, isDragActive }) {
         ) : null
       )}
 
+      {/* Power-up aktifken dolu hücrelerin üstüne şeffaf dokunma alanı */}
+      {needsPowerTap && cells.map((cell, idx) => {
+        if (!cell) return null;
+        const { cx, cy } = CELLS[idx];
+        const isWFirst = wormholeFirstIdx === idx;
+        return (
+          <TouchableOpacity
+            key={`pu-tap-${idx}`}
+            activeOpacity={0.55}
+            onPress={() => handlePowerUpCellTap(idx)}
+            style={{
+              position: 'absolute',
+              left: cx - HEX_W / 2,
+              top: cy - HEX_R,
+              width: HEX_W,
+              height: HEX_H,
+              zIndex: 200,
+              borderRadius: 5,
+              backgroundColor: isWFirst ? 'rgba(0,238,255,0.18)' : 'rgba(160,80,255,0.15)',
+            }}
+          />
+        );
+      })}
+
       <DyingNodesLayer onMerge={handleChainMerge} />
+      <ExplosionLayer />
+    </View>
+  );
+}
+
+// ── PowerUpBar — 4 joker yetenek butonu ─────────────────────────────────────
+function PowerUpBar() {
+  const activePowerUp  = useStore((s) => s.activePowerUp);
+  const activatePowerUp = useStore((s) => s.activatePowerUp);
+  const applyRewind    = useStore((s) => s.applyRewind);
+  const cancelPowerUp  = useStore((s) => s.cancelPowerUp);
+  const uretMaliyeti   = useStore((s) => s.uretMaliyeti);
+  const undoCostIdx    = useStore((s) => s.undoCostIdx);
+  const previousState  = useStore((s) => s.previousState);
+
+  const costs = {
+    blackhole: uretMaliyeti * 5,
+    wormhole:  uretMaliyeti * 3,
+    overload:  uretMaliyeti * 10,
+    rewind:    UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
+  };
+
+  const handlePress = (id) => {
+    if (id === 'rewind') {
+      applyRewind();
+      return;
+    }
+    if (activePowerUp === id) {
+      cancelPowerUp();
+    } else {
+      activatePowerUp(id);
+    }
+  };
+
+  return (
+    <View style={styles.powerBar}>
+      {POWER_DEFS.map((p) => {
+        const isActive = activePowerUp === p.id;
+        const canUse = p.id === 'rewind' ? !!previousState : true;
+        return (
+          <TouchableOpacity
+            key={p.id}
+            onPress={() => handlePress(p.id)}
+            activeOpacity={0.7}
+            style={[styles.powerBtn, isActive && styles.powerBtnActive, !canUse && styles.powerBtnDim]}
+          >
+            <Text style={styles.powerIcon}>{p.icon}</Text>
+            <Text style={styles.powerCost}>{formatNum(costs[p.id])}</Text>
+          </TouchableOpacity>
+        );
+      })}
     </View>
   );
 }
@@ -1352,7 +1706,7 @@ export default function App() {
         <HexGrid onGridMeasure={handleGridMeasure} isDragActive={ghost.active} />
       </View>
 
-      {/* Footer — Sürüklenebilir parça önizlemeleri */}
+      {/* Footer — Sürüklenebilir parça önizlemeleri + Power-up çubuğu */}
       <View style={styles.footer}>
         <Text style={styles.nextLabel}>S O N R A K İ  —  S Ü R Ü K L E</Text>
         <View style={styles.piecesRow}>
@@ -1373,6 +1727,7 @@ export default function App() {
             Yeterli kredi yok — bekle
           </Text>
         )}
+        <PowerUpBar />
       </View>
 
       {/* Sürükleme ghost — parmağın biraz üzerinde yüzer */}
@@ -1578,5 +1933,67 @@ const styles = StyleSheet.create({
     fontWeight: '200',
     letterSpacing: 3,
     marginTop: 4,
+  },
+  // ── Power-up çubuğu ────────────────────────────────────────────────────────
+  powerBar: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+    gap: 10,
+  },
+  powerBtn: {
+    width: Math.round(SCREEN_WIDTH * 0.165),
+    height: Math.round(SCREEN_WIDTH * 0.165),
+    borderRadius: Math.round(SCREEN_WIDTH * 0.083),
+    borderWidth: 1.5,
+    borderColor: '#4422aa',
+    backgroundColor: '#1a0838',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#7733cc',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  powerBtnActive: {
+    borderColor: '#cc44ff',
+    backgroundColor: '#2a0860',
+    shadowColor: '#cc44ff',
+    shadowOpacity: 0.7,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  powerBtnDim: {
+    opacity: 0.35,
+  },
+  powerIcon: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.055),
+    lineHeight: Math.round(SCREEN_WIDTH * 0.065),
+  },
+  powerCost: {
+    color: '#9966cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '200',
+    letterSpacing: 0.5,
+    marginTop: 1,
+  },
+  // ── Kilitli hücre overlay ─────────────────────────────────────────────────
+  lockedOverlay: {
+    borderRadius: 6,
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  lockedIcon: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.048),
+    lineHeight: Math.round(SCREEN_WIDTH * 0.056),
+  },
+  lockedCount: {
+    color: '#ff4455',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+    marginTop: 1,
   },
 });
