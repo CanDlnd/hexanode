@@ -1766,7 +1766,70 @@ function HexGrid({ onGridMeasure, isDragActive }) {
   );
 }
 
-// ── PowerUpBar — 4 joker yetenek butonu ─────────────────────────────────────
+// ── PowerUpBtn — tek bir yetenek butonu (kırmızı flaş desteği) ──────────────
+function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
+  // Border animasyonu: tıklanınca kırmızı flaş → mat griye geri dön
+  const borderAnim = useRef(new Animated.Value(0)).current;
+  const flashRef   = useRef(null);
+
+  const triggerFlash = useCallback(() => {
+    flashRef.current?.stop();
+    borderAnim.setValue(1);
+    flashRef.current = Animated.timing(borderAnim, {
+      toValue: 0,
+      duration: 220,
+      useNativeDriver: false,
+    });
+    flashRef.current.start();
+  }, [borderAnim]);
+
+  const handleTap = useCallback(() => {
+    if (!canUse) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      playSound('error');
+      triggerFlash();
+      return;
+    }
+    onPress(def.id);
+  }, [canUse, onPress, def.id, triggerFlash]);
+
+  const iconSize   = Math.round(SCREEN_WIDTH * 0.062);
+  // İkon rengi: aktifse beyaz, yetmiyorsa %50 opak asıl renk, yetiyorsa asıl renk
+  const iconColor  = isActive ? '#ffffff' : def.defaultColor;
+  const iconOpacity = canAfford ? 1 : 0.45;
+
+  // Border rengi: flaş sırasında kırmızı, normal durumda canAfford'a göre
+  const animBorderColor = borderAnim.interpolate({
+    inputRange:  [0, 1],
+    outputRange: [
+      isActive ? '#cc44ff' : (canAfford ? '#4422aa' : '#444455'),
+      '#ff3355',
+    ],
+  });
+
+  const costColor   = canAfford ? '#ffffff' : '#ff3355';
+  const hcIconColor = canAfford ? '#aa44ff' : '#ff3355';
+
+  return (
+    <TouchableOpacity onPress={handleTap} activeOpacity={0.75}>
+      <Animated.View style={[
+        styles.powerBtn,
+        isActive && styles.powerBtnActive,
+        { borderColor: animBorderColor },
+      ]}>
+        <View style={{ opacity: iconOpacity }}>
+          <def.Icon size={iconSize} color={iconColor} />
+        </View>
+        <View style={styles.powerCostRow}>
+          <Text style={[styles.powerCost, { color: costColor }]}>{cost}</Text>
+          <HexaCoreIcon size={11} color={hcIconColor} />
+        </View>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
+// ── PowerUpBar ────────────────────────────────────────────────────────────────
 function PowerUpBar() {
   const activePowerUp  = useStore((s) => s.activePowerUp);
   const activatePowerUp = useStore((s) => s.activatePowerUp);
@@ -1776,7 +1839,6 @@ function PowerUpBar() {
   const undoCostIdx    = useStore((s) => s.undoCostIdx);
   const previousState  = useStore((s) => s.previousState);
 
-  // Sabit HexaCore maliyetleri
   const hcCosts = {
     blackhole: POWER_HC_COST.blackhole,
     wormhole:  POWER_HC_COST.wormhole,
@@ -1784,56 +1846,31 @@ function PowerUpBar() {
     rewind:    UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
   };
 
-  const handlePress = (id) => {
+  const handlePress = useCallback((id) => {
     if (id === 'rewind') {
-      const res = applyRewind();
-      if (!res?.ok) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        playSound('error');
-      }
+      applyRewind();
       return;
     }
-    if (activePowerUp === id) {
-      cancelPowerUp();
-    } else {
-      activatePowerUp(id);
-    }
-  };
+    if (activePowerUp === id) cancelPowerUp();
+    else activatePowerUp(id);
+  }, [activePowerUp, activatePowerUp, cancelPowerUp, applyRewind]);
 
   return (
     <View style={styles.powerBar}>
       {POWER_DEFS.map((p) => {
-        const isActive  = activePowerUp === p.id;
         const cost      = hcCosts[p.id];
         const canAfford = hexaCore >= cost;
         const canUse    = p.id === 'rewind' ? !!previousState && canAfford : canAfford;
-        const iconColor = isActive ? '#ffffff' : (canAfford ? p.defaultColor : '#444466');
-        const iconSize  = Math.round(SCREEN_WIDTH * 0.062);
         return (
-          <TouchableOpacity
+          <PowerUpBtn
             key={p.id}
-            onPress={() => canUse ? handlePress(p.id) : (
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
-            )}
-            activeOpacity={canUse ? 0.7 : 1}
-            style={[
-              styles.powerBtn,
-              isActive  && styles.powerBtnActive,
-              !canAfford && styles.powerBtnDim,
-            ]}
-          >
-            <p.Icon size={iconSize} color={iconColor} />
-            {/* HexaCore maliyeti — SVG ikon ile göster */}
-            <View style={styles.powerCostRow}>
-              <Text style={[styles.powerCost, isActive && styles.powerCostActive, !canAfford && styles.powerCostDim]}>
-                {cost}
-              </Text>
-              <HexaCoreIcon
-                size={11}
-                color={!canAfford ? '#333355' : (isActive ? '#ddaaff' : '#9966cc')}
-              />
-            </View>
-          </TouchableOpacity>
+            def={p}
+            cost={cost}
+            isActive={activePowerUp === p.id}
+            canAfford={canAfford}
+            canUse={canUse}
+            onPress={handlePress}
+          />
         );
       })}
     </View>
@@ -2552,7 +2589,7 @@ const styles = StyleSheet.create({
     height: Math.round(SCREEN_WIDTH * 0.165),
     borderRadius: Math.round(SCREEN_WIDTH * 0.083),
     borderWidth: 1.5,
-    borderColor: '#4422aa',
+    // borderColor: animasyonla kontrol edildiği için burada yok
     backgroundColor: '#1a0838',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2563,15 +2600,11 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   powerBtnActive: {
-    borderColor: '#cc44ff',
     backgroundColor: '#2a0860',
     shadowColor: '#cc44ff',
     shadowOpacity: 0.7,
     shadowRadius: 12,
     elevation: 8,
-  },
-  powerBtnDim: {
-    opacity: 0.35,
   },
   powerIcon: {
     fontSize: Math.round(SCREEN_WIDTH * 0.055),
