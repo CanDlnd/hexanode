@@ -1,6 +1,21 @@
 import React from 'react';
 import Svg, { Path, Circle } from 'react-native-svg';
 
+// ── HexaCore (prestij para birimi) ikonu ─────────────────────────────────────
+export const HexaCoreIcon = ({ size = 16, color = '#aa44ff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M12 2l9 4.9V17L12 22l-9-4.9V7z"
+      fill={color} fillOpacity="0.22"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path d="M12 2v20" stroke={color} strokeWidth="1.2" strokeOpacity="0.45" />
+    <Path d="M3 7l9 5.5"  stroke={color} strokeWidth="1.2" strokeOpacity="0.45" />
+    <Path d="M21 7l-9 5.5" stroke={color} strokeWidth="1.2" strokeOpacity="0.45" />
+  </Svg>
+);
+
 // ── Kara Delik: kesikli daireler + merkez dolgu ───────────────────────────────
 export const BlackHoleIcon = ({ size = 32, color = '#aa44ff' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">

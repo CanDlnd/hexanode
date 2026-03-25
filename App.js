@@ -18,6 +18,7 @@ import {
   WormholeIcon,
   OverloadIcon,
   RewindIcon,
+  HexaCoreIcon,
 } from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -246,16 +247,56 @@ function nodeStrokeColor(value) {
   return NODE_STROKE_ARR[Math.min(idx, NODE_STROKE_ARR.length - 1)];
 }
 
-// Sonraki spawn değeri: %75 → 2, %25 → 4
+// ── Prestij sabitleri ─────────────────────────────────────────────────────────
+const PRESTIGE_UPGRADES = {
+  dataFlow: {
+    name: 'Veri Akışı',
+    desc: 'Pasif geliri kalıcı olarak +%10 artırır (yığılır)',
+    costs: [5, 15, 35, 75, 150],
+    maxLevel: 5,
+  },
+  richStart: {
+    name: 'Zengin Başlangıç',
+    desc: 'Her yeni oyuna +500 ekstra kredi ile başla',
+    costs: [10, 30, 70],
+    maxLevel: 3,
+  },
+  advancedNode: {
+    name: 'Gelişmiş Düğüm',
+    desc: 'Dock\'taki başlangıç taşlarının seviyesi artar',
+    costs: [8, 20, 50],
+    maxLevel: 3,
+  },
+};
+
+// advancedNode seviyesine göre sonraki spawn değeri
+// Level 0: 60% → 2, 40% → 4
+// Level 1: 30% → 2, 40% → 4, 30% → 8
+// Level 2: 10% → 2, 40% → 4, 30% → 8, 20% → 16
+// Level 3: 20% → 4, 40% → 8, 30% → 16, 10% → 32
 function pickNextValue() {
-  return Math.random() < 0.75 ? 2 : 4;
+  let level = 0;
+  try { level = useStore?.getState()?.prestigeUpgrades?.advancedNode ?? 0; } catch (_) { }
+  const TABLES = [
+    [2, 2, 2, 2, 2, 2, 4, 4, 4, 4],
+    [2, 2, 2, 4, 4, 4, 4, 8, 8, 8],
+    [2, 4, 4, 4, 4, 8, 8, 8, 16, 16],
+    [4, 4, 4, 4, 8, 8, 8, 16, 16, 32],
+  ];
+  const table = TABLES[Math.min(level, TABLES.length - 1)];
+  return table[Math.floor(Math.random() * table.length)];
 }
 
-// Grid doluyken hiç eşleşme yoksa oyun biter
-function checkGameOver(cells) {
+// Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
+function scoreToHexaCore(cells) {
+  const total = cells.reduce((s, c) => (c ? s + c.value : s), 0);
+  return Math.max(1, Math.floor(total / 100));
+}
+
+// Game Over: grid TAMAMEN dolu VE Kara Delik için HexaCore (5🔮) yetersizse
+function checkGameOver(cells, hexaCore = Infinity) {
   if (cells.some((c) => c === null)) return false;
-  const values = cells.map((c) => c.value);
-  return new Set(values).size === values.length;
+  return hexaCore < POWER_HC_COST.blackhole; // 5 🔮
 }
 
 // ── Hex komşuluk (odd-r offset: tek satırlar sağa kaymış) ─────────────────────
@@ -330,12 +371,14 @@ function runChainMerge(cells, startIdx) {
 }
 
 // ── Power-up sabitleri ────────────────────────────────────────────────────────
-const UNDO_COSTS = [1000, 5000, 50000, 1_000_000];
+// Sabit HexaCore maliyetleri — krediden bağımsız
+const UNDO_COSTS = [1, 3, 10, 25]; // Zamanı Geri Sar katlanarak artar
+const POWER_HC_COST = { blackhole: 5, wormhole: 3, overload: 10 };
 const POWER_DEFS = [
-  { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK',    costMult: 5,  defaultColor: '#aa44ff' },
-  { id: 'wormhole',  Icon: WormholeIcon,  short: 'SOLUCAN DELİĞİ', costMult: 3,  defaultColor: '#00ffe0' },
-  { id: 'overload',  Icon: OverloadIcon,  short: 'AŞIRI YÜKLE',   costMult: 10, defaultColor: '#ffdd00' },
-  { id: 'rewind',    Icon: RewindIcon,    short: 'GERİ SAR',       costMult: 0,  defaultColor: '#ff3355' },
+  { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK',    hcCost: 5,  defaultColor: '#aa44ff' },
+  { id: 'wormhole',  Icon: WormholeIcon,  short: 'SOLUCAN DELİĞİ', hcCost: 3,  defaultColor: '#00ffe0' },
+  { id: 'overload',  Icon: OverloadIcon,  short: 'AŞIRI YÜKLE',   hcCost: 10, defaultColor: '#ffdd00' },
+  { id: 'rewind',    Icon: RewindIcon,    short: 'GERİ SAR',       hcCost: 0,  defaultColor: '#ff3355' },
 ];
 
 // Undo için anlık oyun durumu snapshot'ı
@@ -382,20 +425,24 @@ const useStore = create(
       undoCostIdx: 0,             // UNDO_COSTS dizisindeki pozisyon
       previousState: null,        // son hamle öncesi snapshot (undo için)
       lastOverloadEvent: null,    // { cellIdx, exploded, id }
+      // ── Prestij state ───────────────────────────────────────────────────────
+      hexaCore: 50,               // kalıcı prestij para birimi (başlangıç hediyesi)
+      prestigeUpgrades: { dataFlow: 0, richStart: 0, advancedNode: 0 },
 
       addCredits: (amount) => set((s) => ({ credits: s.credits + amount })),
 
       selectPiece: (idx) => set({ selectedPieceIdx: idx }),
 
       calculateOffline: () => {
-        const { lastLogin, cells } = get();
+        const { lastLogin, cells, prestigeUpgrades } = get();
         const MAX_SEC = 4 * 60 * 60;
         const elapsed = Math.floor((Date.now() - lastLogin) / 1000);
         if (elapsed < 1) return;
         const effective = Math.min(elapsed, MAX_SEC);
         const capReached = elapsed >= MAX_SEC;
+        const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
         const ips = cells.reduce((s, c) => (c ? s + nodeIncome(c.value) : s), 0);
-        const earned = Math.floor(effective * ips);
+        const earned = Math.floor(effective * ips * mult);
         if (earned >= 10) {
           set({ offlineEarned: earned, offlineCapReached: capReached, lastLogin: Date.now() });
         } else if (earned > 0) {
@@ -416,10 +463,12 @@ const useStore = create(
       },
 
       tickIncome: () => {
-        const { cells } = get();
+        const { cells, prestigeUpgrades } = get();
+        const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
         const income = cells.reduce((s, c) => (c ? s + nodeIncome(c.value) : s), 0);
+        const boosted = Math.floor(income * mult);
         set((s) => ({
-          credits: income > 0 ? s.credits + income : s.credits,
+          credits: boosted > 0 ? s.credits + boosted : s.credits,
           lastLogin: Date.now(),
           tickId: s.tickId + 1,
         }));
@@ -442,7 +491,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          gameOver: checkGameOver(cr.cells, s.hexaCore),
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
@@ -465,7 +514,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          gameOver: checkGameOver(cr.cells, s.hexaCore),
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
@@ -508,7 +557,7 @@ const useStore = create(
             cells: cr.cells,
             nextPieces: newPieces,
             selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-            gameOver: checkGameOver(cr.cells),
+          gameOver: checkGameOver(cr.cells, s.hexaCore),
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             lastChainEvent: {
@@ -526,7 +575,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          gameOver: checkGameOver(cr.cells, s.hexaCore),
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
           lastChainEvent: cr.steps.length > 0
@@ -568,7 +617,7 @@ const useStore = create(
           const allCleared = [step0.cleared[0], ...cr.cleared];
           set({
             cells: cr.cells,
-            gameOver: checkGameOver(cr.cells),
+          gameOver: checkGameOver(cr.cells, s.hexaCore),
             lockedCells: decrementLocks(lockedCells),
             previousState: snap,
             lastChainEvent: {
@@ -594,7 +643,7 @@ const useStore = create(
         const primaryMergedAt = chain1.steps.length >= chain2.steps.length ? chain1.mergedAt : chain2.mergedAt;
         set({
           cells: chain2.cells,
-          gameOver: checkGameOver(chain2.cells),
+          gameOver: checkGameOver(chain2.cells, s.hexaCore),
           lockedCells: decrementLocks(lockedCells),
           previousState: snap,
           lastChainEvent: allSteps.length > 0
@@ -620,17 +669,18 @@ const useStore = create(
       applyBlackHole: (cellIdx) => {
         const s = get();
         if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
-        const cost = s.uretMaliyeti * 5;
+        const cost = POWER_HC_COST.blackhole;
+        if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const newCells = [...s.cells];
         newCells[cellIdx] = null;
         set({
           cells: newCells,
-          credits: s.credits - cost,
+          hexaCore: s.hexaCore - cost,
           lockedCells: { ...s.lockedCells, [cellIdx]: 3 },
           previousState: snap,
           activePowerUp: null,
-          gameOver: checkGameOver(newCells),
+          gameOver: checkGameOver(newCells, s.hexaCore - cost),
           lastChainEvent: null,
         });
         return { ok: true };
@@ -650,7 +700,8 @@ const useStore = create(
         }
         const first = s.wormholeFirstIdx;
         if (s.lockedCells[first]) return { ok: false };
-        const cost = s.uretMaliyeti * 3;
+        const cost = POWER_HC_COST.wormhole;
+        if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const swapped = [...s.cells];
         swapped[cellIdx] = s.cells[first];
@@ -664,16 +715,17 @@ const useStore = create(
         const allCleared = [...chain1.cleared, ...chain2.cleared];
         const totalDepth = allSteps.length;
         const chainTriggered = totalDepth > 0;
-        const bonusCredits = chainTriggered ? totalDepth * s.uretMaliyeti * 2 : 0;
+        // Zincir tetiklenirse bonus HexaCore (derinlik * 1)
+        const bonusHC = chainTriggered ? Math.min(totalDepth, 5) : 0;
         const primaryMergedAt = chain1.steps.length >= chain2.steps.length ? chain1.mergedAt : chain2.mergedAt;
         set({
           cells: chain2.cells,
-          credits: s.credits - cost + bonusCredits,
+          hexaCore: s.hexaCore - cost + bonusHC,
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
           activePowerUp: null,
           wormholeFirstIdx: null,
-          gameOver: checkGameOver(chain2.cells),
+          gameOver: checkGameOver(chain2.cells, s.hexaCore),
           lastChainEvent: allSteps.length > 0
             ? { steps: allSteps, cleared: allCleared, finalMergedAt: primaryMergedAt, chainDepth: totalDepth, id: chain1.id }
             : null,
@@ -685,7 +737,8 @@ const useStore = create(
       applyOverload: (cellIdx) => {
         const s = get();
         if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
-        const cost = s.uretMaliyeti * 10;
+        const cost = POWER_HC_COST.overload;
+        if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const id = Date.now() + Math.random();
         if (Math.random() < 0.7) {
@@ -695,11 +748,11 @@ const useStore = create(
           const cr = runChainMerge(boosted, cellIdx);
           set({
             cells: cr.cells,
-            credits: s.credits - cost,
+            hexaCore: s.hexaCore - cost,
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(cr.cells),
+            gameOver: checkGameOver(cr.cells, s.hexaCore - cost),
             lastChainEvent: cr.steps.length > 0
               ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
               : null,
@@ -712,11 +765,11 @@ const useStore = create(
           exploded[cellIdx] = null;
           set({
             cells: exploded,
-            credits: s.credits - cost,
+            hexaCore: s.hexaCore - cost,
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(exploded),
+            gameOver: checkGameOver(exploded, s.hexaCore - cost),
             lastChainEvent: null,
             lastOverloadEvent: { cellIdx, exploded: true, id },
           });
@@ -724,13 +777,16 @@ const useStore = create(
         }
       },
 
-      // Zamanı Geri Sar: son hamleyi geri al (maliyet katlanarak artar)
+      // Zamanı Geri Sar: son hamleyi geri al (katlanarak artan HexaCore maliyeti)
       applyRewind: () => {
         const s = get();
         if (!s.previousState) return { ok: false };
         const costIdx = Math.min(s.undoCostIdx, UNDO_COSTS.length - 1);
+        const cost = UNDO_COSTS[costIdx];
+        if (s.hexaCore < cost) return { ok: false, noHC: true };
         set({
           ...s.previousState,
+          hexaCore: s.hexaCore - cost, // mevcut hexaCore'dan düş (geri alınan state'inkinden değil)
           undoCostIdx: costIdx + 1,
           previousState: null,
           activePowerUp: null,
@@ -742,10 +798,54 @@ const useStore = create(
         return { ok: true };
       },
 
+      // Oyun bitti: HexaCore topla, sonra sıfırla
+      collectPrestigeAndReset: () => {
+        const { cells, prestigeUpgrades } = get();
+        const earned = scoreToHexaCore(cells);
+        const richStart = prestigeUpgrades?.richStart ?? 0;
+        const startCredits = 50 + 500 * richStart;
+        set((s) => ({
+          hexaCore: s.hexaCore + earned,
+          cells: Array(ROWS * COLS).fill(null),
+          credits: startCredits,
+          uretMaliyeti: 10,
+          nextPieces: [pickNextValue(), pickNextValue()],
+          selectedPieceIdx: 0,
+          gameOver: false,
+          offlineEarned: null,
+          offlineCapReached: false,
+          lastLogin: Date.now(),
+          activePowerUp: null,
+          wormholeFirstIdx: null,
+          lockedCells: {},
+          undoCostIdx: 0,
+          previousState: null,
+          lastOverloadEvent: null,
+        }));
+      },
+
+      // Prestij yükseltme satın al
+      buyPrestigeUpgrade: (id) => {
+        const { hexaCore, prestigeUpgrades } = get();
+        const def = PRESTIGE_UPGRADES[id];
+        if (!def) return { ok: false };
+        const curLevel = prestigeUpgrades?.[id] ?? 0;
+        if (curLevel >= def.maxLevel) return { ok: false, maxed: true };
+        const cost = def.costs[curLevel];
+        if (hexaCore < cost) return { ok: false, noCredits: true };
+        set((s) => ({
+          hexaCore: s.hexaCore - cost,
+          prestigeUpgrades: { ...s.prestigeUpgrades, [id]: curLevel + 1 },
+        }));
+        return { ok: true };
+      },
+
       resetGame: () => {
+        const { prestigeUpgrades } = get();
+        const richStart = prestigeUpgrades?.richStart ?? 0;
         set({
           cells: Array(ROWS * COLS).fill(null),
-          credits: 50,
+          credits: 50 + 500 * richStart,
           uretMaliyeti: 10,
           nextPieces: [pickNextValue(), pickNextValue()],
           selectedPieceIdx: 0,
@@ -763,7 +863,7 @@ const useStore = create(
       },
     }),
     {
-      name: 'hexanode-storage-v6',
+      name: 'hexanode-storage-v8',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         cells: s.cells,
@@ -775,6 +875,8 @@ const useStore = create(
         gameOver: s.gameOver,
         lockedCells: s.lockedCells,
         undoCostIdx: s.undoCostIdx,
+        hexaCore: s.hexaCore,
+        prestigeUpgrades: s.prestigeUpgrades,
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) return;
@@ -812,20 +914,27 @@ function AnimatedPressable({ onPress, style, children, activeOpacity = 1 }) {
 }
 
 // ── EconDisplay ───────────────────────────────────────────────────────────────
-function EconDisplay() {
+function EconDisplay({ onOpenLab }) {
   const credits = useStore((s) => s.credits);
+  const hexaCore = useStore((s) => s.hexaCore);
   const cells = useStore((s) => s.cells);
+  const prestigeUpgrades = useStore((s) => s.prestigeUpgrades);
 
-  const incomePerSec = cells.reduce((sum, cell) => {
-    if (!cell) return sum;
-    return sum + nodeIncome(cell.value);
-  }, 0);
+  const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
+  const baseIncome = cells.reduce((sum, cell) => (cell ? sum + nodeIncome(cell.value) : sum), 0);
+  const incomePerSec = Math.floor(baseIncome * mult);
 
   return (
-    <View style={styles.econRow}>
-      <Text style={styles.econCredits}>{formatNum(credits)} ✦</Text>
-      <Text style={styles.econSep}>  ·  </Text>
-      <Text style={styles.econIncome}>+{formatNum(incomePerSec)}/sn</Text>
+    <View style={styles.econCol}>
+      <View style={styles.econRow}>
+        <Text style={styles.econCredits}>{formatNum(credits)} ✦</Text>
+        <Text style={styles.econSep}>  ·  </Text>
+        <Text style={styles.econIncome}>+{formatNum(incomePerSec)}/sn</Text>
+      </View>
+      <TouchableOpacity style={styles.hexaCoreRow} onPress={onOpenLab} activeOpacity={0.75}>
+        <HexaCoreIcon size={13} color="#aa44ff" />
+        <Text style={styles.hexaCoreText}> {hexaCore}  HexaCore</Text>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -908,9 +1017,9 @@ function NodeHex({ value }) {
   // Karakter sayısına göre font kademeli olarak küçülür — tek satırda sığması garanti
   const fs = label.length <= 2 ? Math.round(HEX_R * 0.44)
     : label.length === 3 ? Math.round(HEX_R * 0.38)
-    : label.length === 4 ? Math.round(HEX_R * 0.32)
-    : label.length === 5 ? Math.round(HEX_R * 0.27)
-    : Math.round(HEX_R * 0.23); // 6+ karakter (100K, 1M vb.)
+      : label.length === 4 ? Math.round(HEX_R * 0.32)
+        : label.length === 5 ? Math.round(HEX_R * 0.27)
+          : Math.round(HEX_R * 0.23); // 6+ karakter (100K, 1M vb.)
 
   return (
     <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
@@ -1098,46 +1207,212 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onD
 }
 
 // ── GameOverModal ─────────────────────────────────────────────────────────────
-function GameOverModal({ visible }) {
-  const resetGame = useStore((s) => s.resetGame);
+function GameOverModal({ visible, onOpenLab }) {
+  const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
   const cells = useStore((s) => s.cells);
   const best = cells.reduce((max, c) => (c && c.value > max ? c.value : max), 0);
+  const earned = scoreToHexaCore(cells);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.88)).current;
+  const scaleAnim = useRef(new Animated.Value(0.82)).current;
+  const glowAnim = useRef(new Animated.Value(0)).current;
+  const glowLoopRef = useRef(null);
 
   useEffect(() => {
     if (visible) {
+      // fadeAnim ve scaleAnim: useNativeDriver false (borderColor JS-side olduğundan tutarlı olmalı)
       Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
-        Animated.spring(scaleAnim, { toValue: 1, speed: 14, bounciness: 8, useNativeDriver: true }),
+        Animated.timing(fadeAnim,  { toValue: 1, duration: 320, useNativeDriver: false }),
+        Animated.spring(scaleAnim, { toValue: 1, speed: 12, bounciness: 10, useNativeDriver: false }),
       ]).start();
+      // glowAnim loopunu ayrı başlat (farklı driver karışmasın)
+      glowLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(glowAnim, { toValue: 1, duration: 1200, useNativeDriver: false }),
+          Animated.timing(glowAnim, { toValue: 0.3, duration: 1200, useNativeDriver: false }),
+        ])
+      );
+      glowLoopRef.current.start();
     } else {
+      glowLoopRef.current?.stop();
       fadeAnim.setValue(0);
-      scaleAnim.setValue(0.88);
+      scaleAnim.setValue(0.82);
+      glowAnim.setValue(0);
     }
   }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!visible) return null;
 
+  const glowBorder = glowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['rgba(140,30,220,0.45)', 'rgba(200,60,255,0.95)'],
+  });
+  const glowShadow = glowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [4, 14],
+  });
+
   return (
-    <Modal visible transparent statusBarTranslucent onRequestClose={() => { }}>
+    <Modal visible transparent statusBarTranslucent onRequestClose={() => {}}>
+      {/* Karanlık overlay */}
+      <Animated.View style={[styles.goOverlay, { opacity: fadeAnim }]}>
+        {/* Modal kutu */}
+        <Animated.View style={[
+          styles.goBox,
+          {
+            transform: [{ scale: scaleAnim }],
+            borderColor: glowBorder,
+            shadowRadius: glowShadow,
+          },
+        ]}>
+          {/* Başlık şeridi */}
+          <View style={styles.goTitleBlock}>
+            <Text style={styles.goTitleSub}>// AĞAZ SİSTEM RAPORU</Text>
+            <Text style={styles.goTitle}>SİSTEM KİLİTLENDİ</Text>
+          </View>
+
+          {/* Kırmızı çizgi */}
+          <View style={styles.goLine} />
+
+          {/* Skor satırı */}
+          <View style={styles.goScoreRow}>
+            <View style={styles.goScoreCell}>
+              <Text style={styles.goScoreLbl}>EN YÜKSEK</Text>
+              <Text style={styles.goScoreVal}>{formatNum(best)}</Text>
+            </View>
+            <View style={styles.goScoreDivider} />
+            <View style={styles.goScoreCell}>
+              <Text style={styles.goScoreLbl}>ÇIKARILAN</Text>
+              {/* HexaCore miktarı — SVG ikon ile */}
+              <View style={styles.goHcRow}>
+                <Text style={styles.goHcNum}>+{earned}</Text>
+                <HexaCoreIcon size={22} color="#cc66ff" />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.goLine} />
+
+          {/* Buton sırası */}
+          <View style={styles.goBtnRow}>
+            <TouchableOpacity
+              style={styles.goRestartBtn}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                collectPrestigeAndReset();
+              }}
+              activeOpacity={0.82}
+            >
+              <Text style={styles.goRestartTxt}>YENİDEN BAŞLAT</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.goLabBtn}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                onOpenLab();
+              }}
+              activeOpacity={0.82}
+            >
+              <Text style={styles.goLabTxt}>LABORATUVAR</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+// ── LabModal — Prestij Yükseltme Marketi ─────────────────────────────────────
+function LabModal({ visible, onClose }) {
+  const hexaCore = useStore((s) => s.hexaCore);
+  const prestigeUpgrades = useStore((s) => s.prestigeUpgrades);
+  const buyPrestigeUpgrade = useStore((s) => s.buyPrestigeUpgrade);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(60)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 16, bounciness: 8, useNativeDriver: true }),
+      ]).start();
+    } else {
+      fadeAnim.setValue(0);
+      slideAnim.setValue(60);
+    }
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!visible) return null;
+
+  const UPGRADE_ROWS = [
+    { id: 'dataFlow', ...PRESTIGE_UPGRADES.dataFlow },
+    { id: 'richStart', ...PRESTIGE_UPGRADES.richStart },
+    { id: 'advancedNode', ...PRESTIGE_UPGRADES.advancedNode },
+  ];
+
+  return (
+    <Modal visible transparent statusBarTranslucent onRequestClose={onClose}>
       <Animated.View style={[styles.modalOverlay, { opacity: fadeAnim }]}>
-        <Animated.View style={[styles.modalBox, { transform: [{ scale: scaleAnim }] }]}>
-          <Text style={styles.modalTitle}>A Ğ   K İ L İ T L E N D İ</Text>
-          <Text style={styles.gameOverSub}>Birleştirilebilecek node kalmadı</Text>
-          <Text style={styles.gameOverBest}>{formatNum(best)}</Text>
-          <Text style={styles.gameOverBestLabel}>en yüksek değer</Text>
-          <AnimatedPressable
-            style={[styles.btn, { marginTop: 28 }]}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              resetGame();
-            }}
-            activeOpacity={0.9}
-          >
-            <Text style={styles.btnText}>Y E N İ D E N   B A Ş L A</Text>
-          </AnimatedPressable>
+        <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
+          {/* Başlık */}
+          <Text style={styles.labTitle}>L A B O R A T U V A R</Text>
+          <View style={styles.labHexaCoreRow}>
+            <HexaCoreIcon size={20} color="#cc66ff" />
+            <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
+            <Text style={styles.labHexaCoreLabel}>  HexaCore</Text>
+          </View>
+          <View style={styles.goDivider} />
+
+          {/* Yükseltmeler */}
+          {UPGRADE_ROWS.map((upg) => {
+            const curLevel = prestigeUpgrades?.[upg.id] ?? 0;
+            const isMaxed = curLevel >= upg.maxLevel;
+            const cost = isMaxed ? null : upg.costs[curLevel];
+            const canAfford = !isMaxed && hexaCore >= cost;
+
+            return (
+              <View key={upg.id} style={styles.labUpgRow}>
+                <View style={styles.labUpgInfo}>
+                  <View style={styles.labUpgTitleRow}>
+                    <Text style={styles.labUpgName}>{upg.name}</Text>
+                    <Text style={styles.labUpgLevel}>
+                      {isMaxed ? 'MAX' : `Lv ${curLevel}/${upg.maxLevel}`}
+                    </Text>
+                  </View>
+                  <Text style={styles.labUpgDesc}>{upg.desc}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.labUpgBtn,
+                    isMaxed && styles.labUpgBtnMaxed,
+                    !canAfford && !isMaxed && styles.labUpgBtnDim,
+                  ]}
+                  disabled={isMaxed}
+                  onPress={() => {
+                    const res = buyPrestigeUpgrade(upg.id);
+                    if (res.ok) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    else Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+                  }}
+                  activeOpacity={0.75}
+                >
+                  {isMaxed ? (
+                    <Text style={styles.labUpgBtnTxt}>✓</Text>
+                  ) : (
+                    <View style={styles.labCostRow}>
+                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
+                      <HexaCoreIcon size={12} color={canAfford ? '#dd88ff' : '#443355'} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+
+          <TouchableOpacity style={[styles.btn, { marginTop: 18 }]} onPress={onClose} activeOpacity={0.85}>
+            <Text style={styles.btnText}>K A P A T</Text>
+          </TouchableOpacity>
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -1497,20 +1772,25 @@ function PowerUpBar() {
   const activatePowerUp = useStore((s) => s.activatePowerUp);
   const applyRewind    = useStore((s) => s.applyRewind);
   const cancelPowerUp  = useStore((s) => s.cancelPowerUp);
-  const uretMaliyeti   = useStore((s) => s.uretMaliyeti);
+  const hexaCore       = useStore((s) => s.hexaCore);
   const undoCostIdx    = useStore((s) => s.undoCostIdx);
   const previousState  = useStore((s) => s.previousState);
 
-  const costs = {
-    blackhole: uretMaliyeti * 5,
-    wormhole:  uretMaliyeti * 3,
-    overload:  uretMaliyeti * 10,
+  // Sabit HexaCore maliyetleri
+  const hcCosts = {
+    blackhole: POWER_HC_COST.blackhole,
+    wormhole:  POWER_HC_COST.wormhole,
+    overload:  POWER_HC_COST.overload,
     rewind:    UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
   };
 
   const handlePress = (id) => {
     if (id === 'rewind') {
-      applyRewind();
+      const res = applyRewind();
+      if (!res?.ok) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        playSound('error');
+      }
       return;
     }
     if (activePowerUp === id) {
@@ -1523,21 +1803,36 @@ function PowerUpBar() {
   return (
     <View style={styles.powerBar}>
       {POWER_DEFS.map((p) => {
-        const isActive = activePowerUp === p.id;
-        const canUse = p.id === 'rewind' ? !!previousState : true;
-        const iconColor = isActive ? '#ffffff' : p.defaultColor;
-        const iconSize = Math.round(SCREEN_WIDTH * 0.068);
+        const isActive  = activePowerUp === p.id;
+        const cost      = hcCosts[p.id];
+        const canAfford = hexaCore >= cost;
+        const canUse    = p.id === 'rewind' ? !!previousState && canAfford : canAfford;
+        const iconColor = isActive ? '#ffffff' : (canAfford ? p.defaultColor : '#444466');
+        const iconSize  = Math.round(SCREEN_WIDTH * 0.062);
         return (
           <TouchableOpacity
             key={p.id}
-            onPress={() => handlePress(p.id)}
-            activeOpacity={0.7}
-            style={[styles.powerBtn, isActive && styles.powerBtnActive, !canUse && styles.powerBtnDim]}
+            onPress={() => canUse ? handlePress(p.id) : (
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)
+            )}
+            activeOpacity={canUse ? 0.7 : 1}
+            style={[
+              styles.powerBtn,
+              isActive  && styles.powerBtnActive,
+              !canAfford && styles.powerBtnDim,
+            ]}
           >
             <p.Icon size={iconSize} color={iconColor} />
-            <Text style={[styles.powerCost, isActive && styles.powerCostActive]}>
-              {formatNum(costs[p.id])}
-            </Text>
+            {/* HexaCore maliyeti — SVG ikon ile göster */}
+            <View style={styles.powerCostRow}>
+              <Text style={[styles.powerCost, isActive && styles.powerCostActive, !canAfford && styles.powerCostDim]}>
+                {cost}
+              </Text>
+              <HexaCoreIcon
+                size={11}
+                color={!canAfford ? '#333355' : (isActive ? '#ddaaff' : '#9966cc')}
+              />
+            </View>
           </TouchableOpacity>
         );
       })}
@@ -1649,8 +1944,12 @@ export default function App() {
 
   // Sürükleme ghost durumu
   const [ghost, setGhost] = useState({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
-  const dragPieceIdxRef = useRef(null); // setGhost sıfırlanmadan önce pieceIdx'i saklar
+  const dragPieceIdxRef = useRef(null);
   const gridAbsPos = useRef({ x: 0, y: 0 });
+  // Lab (Prestij Marketi) modalı
+  const [labOpen, setLabOpen] = useState(false);
+  const handleOpenLab = useCallback(() => setLabOpen(true), []);
+  const handleCloseLab = useCallback(() => setLabOpen(false), []);
 
   const modalVisible = offlineEarned != null && offlineEarned > 0;
   const canDrag = true; // TEST: kredi sınırı kapalı
@@ -1743,12 +2042,15 @@ export default function App() {
       </Modal>
 
       {/* Oyun Bitti Modalı */}
-      <GameOverModal visible={gameOver} />
+      <GameOverModal visible={gameOver} onOpenLab={handleOpenLab} />
+
+      {/* Prestij Market Modalı */}
+      <LabModal visible={labOpen} onClose={handleCloseLab} />
 
       {/* Başlık */}
       <View style={styles.header}>
         <Text style={styles.titleMain}>HEXANODE</Text>
-        <EconDisplay />
+        <EconDisplay onOpenLab={handleOpenLab} />
       </View>
 
       {/* Oyun Alanı */}
@@ -1984,6 +2286,259 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     marginTop: 4,
   },
+  // ── Game Over Cyberpunk Modal ─────────────────────────────────────────────
+  // ── Game Over siberpunk modal ────────────────────────────────────────────
+  goOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 4, 10, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  goBox: {
+    width: '85%',
+    maxWidth: 400,
+    backgroundColor: '#0f0b24',
+    borderWidth: 2,
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#aa44ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.85,
+    elevation: 24,
+  },
+  goTitleBlock: {
+    paddingHorizontal: 22,
+    paddingTop: 24,
+    paddingBottom: 14,
+    alignItems: 'center',
+    backgroundColor: '#160930',
+  },
+  goTitleSub: {
+    color: '#664488',
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '300',
+    letterSpacing: 2,
+    marginBottom: 6,
+    fontFamily: undefined,
+  },
+  goTitle: {
+    color: '#ff2266',
+    fontSize: Math.round(SCREEN_WIDTH * 0.052),
+    fontWeight: '700',
+    letterSpacing: 3,
+    textAlign: 'center',
+  },
+  goLine: {
+    height: 1,
+    backgroundColor: '#2a0a55',
+    marginHorizontal: 0,
+  },
+  goScoreRow: {
+    flexDirection: 'row',
+    paddingVertical: 20,
+    paddingHorizontal: 12,
+  },
+  goScoreCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  goScoreLbl: {
+    color: '#6644aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '300',
+    letterSpacing: 2,
+    marginBottom: 6,
+  },
+  goScoreVal: {
+    color: '#cc88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.13),
+    fontWeight: '200',
+    letterSpacing: 2,
+    lineHeight: Math.round(SCREEN_WIDTH * 0.15),
+  },
+  goScoreDivider: {
+    width: 1,
+    backgroundColor: '#2a0a55',
+    marginVertical: 4,
+  },
+  goHcRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+  },
+  goHcNum: {
+    color: '#dd88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.1),
+    fontWeight: '300',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.12),
+  },
+  goBtnRow: {
+    flexDirection: 'row',
+    padding: 16,
+    gap: 10,
+  },
+  goRestartBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#ff2266',
+    backgroundColor: 'rgba(255,34,102,0.12)',
+    alignItems: 'center',
+  },
+  goRestartTxt: {
+    color: '#ff4488',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  goLabBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#7733cc',
+    backgroundColor: 'rgba(100,30,200,0.15)',
+    alignItems: 'center',
+  },
+  goLabTxt: {
+    color: '#aa66ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  // (eski goLabBtnText artık kullanılmıyor — uyumluluk için boş bırak)
+  goLabBtnText: {},
+  goDivider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: '#3a1060',
+    marginVertical: 12,
+  },
+  // ── Lab Modal ─────────────────────────────────────────────────────────────
+  labBox: {
+    backgroundColor: '#090118',
+    borderWidth: 1.5,
+    borderColor: '#3a1a70',
+    borderRadius: 18,
+    paddingHorizontal: 24,
+    paddingTop: 32,
+    paddingBottom: 24,
+    width: SCREEN_WIDTH - 40,
+    shadowColor: '#7733cc',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 22,
+    elevation: 14,
+  },
+  labTitle: {
+    color: '#aa66ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.04),
+    fontWeight: '200',
+    letterSpacing: 5,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  labHexaCoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  labHexaCoreNum: {
+    color: '#dd88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.046),
+    fontWeight: '300',
+  },
+  labHexaCoreLabel: {
+    color: '#7755aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '200',
+  },
+  labUpgRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e0840',
+  },
+  labUpgInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
+  labUpgTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 3,
+  },
+  labUpgName: {
+    color: '#cc88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+  },
+  labUpgLevel: {
+    color: '#9955cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.025),
+    fontWeight: '200',
+  },
+  labUpgDesc: {
+    color: '#7755aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '200',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.034),
+  },
+  labUpgBtn: {
+    minWidth: Math.round(SCREEN_WIDTH * 0.18),
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#7733cc',
+    backgroundColor: '#1a0535',
+    alignItems: 'center',
+  },
+  labUpgBtnMaxed: {
+    borderColor: '#334',
+    backgroundColor: '#0f0f1a',
+  },
+  labUpgBtnDim: {
+    borderColor: '#3a1570',
+  },
+  labUpgBtnTxt: {
+    color: '#dd88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+  },
+  labCostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  // ── EconDisplay genişletilmiş ─────────────────────────────────────────────
+  econCol: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  hexaCoreRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a0a55',
+    backgroundColor: '#0e0228',
+    gap: 4,
+  },
+  hexaCoreText: {
+    color: '#9955cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '200',
+    letterSpacing: 1,
+  },
   // ── Power-up çubuğu ────────────────────────────────────────────────────────
   powerBar: {
     flexDirection: 'row',
@@ -2029,9 +2584,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginTop: 1,
   },
+  powerCostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  powerCostGem: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    lineHeight: Math.round(SCREEN_WIDTH * 0.028),
+    marginLeft: 1,
+  },
   powerCostActive: {
     color: '#ddaaff',
     fontWeight: '300',
+  },
+  powerCostDim: {
+    color: '#333355',
+    opacity: 0.6,
   },
   // ── Kilitli hücre overlay ─────────────────────────────────────────────────
   lockedOverlay: {
