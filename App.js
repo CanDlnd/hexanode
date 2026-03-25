@@ -13,6 +13,12 @@ import {
   AppState,
 } from 'react-native';
 import Svg, { Polygon, Text as SvgText } from 'react-native-svg';
+import {
+  BlackHoleIcon,
+  WormholeIcon,
+  OverloadIcon,
+  RewindIcon,
+} from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -326,10 +332,10 @@ function runChainMerge(cells, startIdx) {
 // ── Power-up sabitleri ────────────────────────────────────────────────────────
 const UNDO_COSTS = [1000, 5000, 50000, 1_000_000];
 const POWER_DEFS = [
-  { id: 'blackhole', icon: '⚫', short: 'KARA DELİK',   costMult: 5  },
-  { id: 'wormhole',  icon: '🌀', short: 'SOLUCAN DELİĞİ', costMult: 3  },
-  { id: 'overload',  icon: '⚡', short: 'AŞIRI YÜKLE',  costMult: 10 },
-  { id: 'rewind',    icon: '↩',  short: 'GERİ SAR',     costMult: 0  }, // cost = UNDO_COSTS
+  { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK',    costMult: 5,  defaultColor: '#aa44ff' },
+  { id: 'wormhole',  Icon: WormholeIcon,  short: 'SOLUCAN DELİĞİ', costMult: 3,  defaultColor: '#00ffe0' },
+  { id: 'overload',  Icon: OverloadIcon,  short: 'AŞIRI YÜKLE',   costMult: 10, defaultColor: '#ffdd00' },
+  { id: 'rewind',    Icon: RewindIcon,    short: 'GERİ SAR',       costMult: 0,  defaultColor: '#ff3355' },
 ];
 
 // Undo için anlık oyun durumu snapshot'ı
@@ -467,18 +473,55 @@ const useStore = create(
         return true;
       },
 
-      // Preview alanından direkt sürüklenerek bırakma
+      // Preview alanından direkt sürüklenerek bırakma:
+      //  • Boş hücre              → yerleştir + zincir
+      //  • Aynı değerli dolu hücre → merge (dock taşı + board taşı) + zincir
+      //  • Farklı değerli dolu     → GEÇERSİZ, snap
       spawnFromPreview: (pieceIdx, cellIdx) => {
         const s = get();
-        if (s.cells[cellIdx] !== null) return { ok: false };
         if (s.lockedCells[cellIdx]) return { ok: false, locked: true };
         const snap = makeSnap(s);
         const valueToPlace = s.nextPieces[pieceIdx];
-        const placed = [...s.cells];
-        placed[cellIdx] = { value: valueToPlace };
-        const cr = runChainMerge(placed, cellIdx);
+        const existing = s.cells[cellIdx];
+
+        // Farklı değerli dolu hücre → yasak
+        if (existing !== null && existing.value !== valueToPlace) {
+          return { ok: false, wrongValue: true };
+        }
+
         const newPieces = [...s.nextPieces];
         newPieces[pieceIdx] = pickNextValue();
+        const working = [...s.cells];
+
+        if (existing !== null && existing.value === valueToPlace) {
+          // Aynı değerli merge: dock taşı board taşına uçar → 2x değer
+          working[cellIdx] = { value: valueToPlace * 2 };
+          const cr = runChainMerge(working, cellIdx);
+          const step0 = {
+            cleared: [{ fromIdx: -1, toIdx: cellIdx, value: valueToPlace }],
+            fromIdx: -1, toIdx: cellIdx,
+            mergedAt: cellIdx, waveIdx: 0, travel: true,
+          };
+          const allSteps = [step0, ...cr.steps.map((st, i) => ({ ...st, waveIdx: i + 1 }))];
+          const allCleared = [step0.cleared[0], ...cr.cleared];
+          set({
+            cells: cr.cells,
+            nextPieces: newPieces,
+            selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
+            gameOver: checkGameOver(cr.cells),
+            lockedCells: decrementLocks(s.lockedCells),
+            previousState: snap,
+            lastChainEvent: {
+              steps: allSteps, cleared: allCleared,
+              finalMergedAt: cr.mergedAt, chainDepth: allSteps.length, id: cr.id,
+            },
+          });
+          return { ok: true, merged: true };
+        }
+
+        // Boş hücre → normal yerleştir
+        working[cellIdx] = { value: valueToPlace };
+        const cr = runChainMerge(working, cellIdx);
         set({
           cells: cr.cells,
           nextPieces: newPieces,
@@ -939,8 +982,9 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onD
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => !cbRef.current.isLocked,
-      onMoveShouldSetPanResponder: () => !cbRef.current.isLocked,
+      // Board Lock: tahtadaki taşlar sürüklenemez (sadece Dock'tan sürükleme var)
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: () => false,
 
       onPanResponderGrant: () => {
         if (cbRef.current.isLocked) return;
@@ -1237,13 +1281,15 @@ function DyingNodesLayer({ onMerge }) {
       setTimeout(() => {
         // Bu adımın DyingNode'larını oluştur
         // fromIdx/toIdx: animasyonun nereden nereye gittiğini kesin olarak belirtir
-        const batch = step.cleared.map((item, i) => ({
-          id: `dying-${id}-${stepIdx}-${i}`,
-          cellIdx: item.fromIdx,       // animasyon başlangıç hücresi
-          targetIdx: item.toIdx,       // animasyon bitiş hücresi
-          value: item.value,
-          fullTravel: step.travel === true,
-        }));
+        const batch = step.cleared
+          .filter((item) => item.fromIdx >= 0) // fromIdx=-1 = dock taşı, animasyona gerek yok
+          .map((item, i) => ({
+            id: `dying-${id}-${stepIdx}-${i}`,
+            cellIdx: item.fromIdx,
+            targetIdx: item.toIdx,
+            value: item.value,
+            fullTravel: step.travel === true,
+          }));
         if (batch.length > 0) {
           setDyingNodes((prev) => [...prev, ...batch]);
         }
@@ -1479,6 +1525,8 @@ function PowerUpBar() {
       {POWER_DEFS.map((p) => {
         const isActive = activePowerUp === p.id;
         const canUse = p.id === 'rewind' ? !!previousState : true;
+        const iconColor = isActive ? '#ffffff' : p.defaultColor;
+        const iconSize = Math.round(SCREEN_WIDTH * 0.068);
         return (
           <TouchableOpacity
             key={p.id}
@@ -1486,8 +1534,10 @@ function PowerUpBar() {
             activeOpacity={0.7}
             style={[styles.powerBtn, isActive && styles.powerBtnActive, !canUse && styles.powerBtnDim]}
           >
-            <Text style={styles.powerIcon}>{p.icon}</Text>
-            <Text style={styles.powerCost}>{formatNum(costs[p.id])}</Text>
+            <p.Icon size={iconSize} color={iconColor} />
+            <Text style={[styles.powerCost, isActive && styles.powerCostActive]}>
+              {formatNum(costs[p.id])}
+            </Text>
           </TouchableOpacity>
         );
       })}
@@ -1645,20 +1695,20 @@ export default function App() {
 
   // Parmak bırakıldı → hedef hücre bul → yerleştir
   const handlePreviewDragEnd = useCallback((absX, absY) => {
-    const pi = dragPieceIdxRef.current; // state sıfırlanmadan önce oku
+    const pi = dragPieceIdxRef.current;
     setGhost({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
-    if (absX < 0 || pi === null) return; // iptal
+    if (absX < 0 || pi === null) return;
     const relX = absX - gridAbsPos.current.x;
     const relY = absY - gridAbsPos.current.y;
+    // Hem boş hem dolu hücrelere bırakılabilir (tolerans: 1.9x)
     const cellIdx = nearestCell(relX, relY, -1, 1.9);
     if (cellIdx === -1) return;
-    const currentCells = useStore.getState().cells;
-    if (currentCells[cellIdx] !== null) return; // dolu hücre
     const result = useStore.getState().spawnFromPreview(pi, cellIdx);
     if (result.ok) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      playSound('spawn');
-    } else if (result.noCredits) {
+      playSound(result.merged ? 'merge' : 'spawn');
+    } else {
+      // wrongValue, locked veya başka geçersiz durum → hata
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       playSound('error');
     }
@@ -1978,6 +2028,10 @@ const styles = StyleSheet.create({
     fontWeight: '200',
     letterSpacing: 0.5,
     marginTop: 1,
+  },
+  powerCostActive: {
+    color: '#ddaaff',
+    fontWeight: '300',
   },
   // ── Kilitli hücre overlay ─────────────────────────────────────────────────
   lockedOverlay: {
