@@ -434,7 +434,7 @@ const useStore = create(
       spawnFromPreview: (pieceIdx, cellIdx) => {
         const { cells, credits, uretMaliyeti, nextPieces } = get();
         if (cells[cellIdx] !== null) return { ok: false };
-        if (credits < uretMaliyeti) return { ok: false, noCredits: true };
+        // if (credits < uretMaliyeti) return { ok: false, noCredits: true }; // TEST: kredi sınırı kapalı
         const valueToPlace = nextPieces[pieceIdx];
         const placed = [...cells];
         placed[cellIdx] = { value: valueToPlace };
@@ -1249,7 +1249,7 @@ export default function App() {
   const gridAbsPos = useRef({ x: 0, y: 0 });
 
   const modalVisible = offlineEarned != null && offlineEarned > 0;
-  const canDrag = credits >= uretMaliyeti;
+  const canDrag = true; // TEST: kredi sınırı kapalı
 
   useEffect(() => { initAudio(); }, []);
 
