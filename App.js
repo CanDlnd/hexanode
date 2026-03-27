@@ -443,12 +443,14 @@ const useStore = create(
       hexaCore: 50,               // kalıcı prestij para birimi (başlangıç hediyesi)
       prestigeUpgrades: { dataFlow: 0, richStart: 0, advancedNode: 0 },
       // ── Navigasyon + Global Ayarlar ─────────────────────────────────────────
-      currentScreen: 'MENU',     // 'MENU' | 'GAME'
+      currentScreen: 'MENU',     // 'MENU' | 'GAME' | 'LAB'
+      previousScreen: 'MENU',    // 'MENU' | 'GAME' — lab'ın açıldığı ekran (kalıcı değil)
       soundEnabled: true,
       hapticsEnabled: true,
-      labOpen: false,             // prestij marketi modalı
+      labOpen: false,             // prestij marketi modalı (legacy, artık setScreen('LAB') kullanılır)
 
       setScreen: (screen) => set({ currentScreen: screen }),
+      setPreviousScreen: (screen) => set({ previousScreen: screen }),
       toggleSound: () => set((s) => ({ soundEnabled: !s.soundEnabled })),
       toggleHaptics: () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
       setLabOpen: (v) => set({ labOpen: v }),
@@ -1445,6 +1447,106 @@ function LabModal({ visible, onClose }) {
   );
 }
 
+// ── LabScreen — Bağımsız ekran olarak Prestij Marketi ─────────────────────────
+function LabScreen() {
+  const hexaCore = useStore((s) => s.hexaCore);
+  const prestigeUpgrades = useStore((s) => s.prestigeUpgrades);
+  const buyPrestigeUpgrade = useStore((s) => s.buyPrestigeUpgrade);
+  const previousScreen = useStore((s) => s.previousScreen);
+  const setScreen = useStore((s) => s.setScreen);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(60)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: 0, speed: 16, bounciness: 8, useNativeDriver: true }),
+    ]).start();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fromMenu = previousScreen === 'MENU';
+  const containerBg = fromMenu ? '#04040a' : C.modalOverlay;
+
+  const UPGRADE_ROWS = [
+    { id: 'dataFlow', ...PRESTIGE_UPGRADES.dataFlow },
+    { id: 'richStart', ...PRESTIGE_UPGRADES.richStart },
+    { id: 'advancedNode', ...PRESTIGE_UPGRADES.advancedNode },
+  ];
+
+  const handleClose = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    setScreen(previousScreen);
+  };
+
+  return (
+    <SafeAreaView style={[styles.labScreenRoot, { backgroundColor: containerBg }]}>
+      <StatusBar barStyle="light-content" backgroundColor={containerBg} />
+      <Animated.View style={[styles.labScreenInner, { opacity: fadeAnim }]}>
+        <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
+          {/* Başlık */}
+          <Text style={styles.labTitle}>L A B O R A T U V A R</Text>
+          <View style={styles.labHexaCoreRow}>
+            <HexaCoreIcon size={20} color="#cc66ff" />
+            <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
+            <Text style={styles.labHexaCoreLabel}>  HexaCore</Text>
+          </View>
+          <View style={styles.goDivider} />
+
+          {/* Yükseltmeler */}
+          {UPGRADE_ROWS.map((upg) => {
+            const curLevel = prestigeUpgrades?.[upg.id] ?? 0;
+            const isMaxed = curLevel >= upg.maxLevel;
+            const cost = isMaxed ? null : upg.costs[curLevel];
+            const canAfford = !isMaxed && hexaCore >= cost;
+
+            return (
+              <View key={upg.id} style={styles.labUpgRow}>
+                <View style={styles.labUpgInfo}>
+                  <View style={styles.labUpgTitleRow}>
+                    <Text style={styles.labUpgName}>{upg.name}</Text>
+                    <Text style={styles.labUpgLevel}>
+                      {isMaxed ? 'MAX' : `Lv ${curLevel}/${upg.maxLevel}`}
+                    </Text>
+                  </View>
+                  <Text style={styles.labUpgDesc}>{upg.desc}</Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.labUpgBtn,
+                    isMaxed && styles.labUpgBtnMaxed,
+                    !canAfford && !isMaxed && styles.labUpgBtnDim,
+                  ]}
+                  disabled={isMaxed}
+                  onPress={() => {
+                    const res = buyPrestigeUpgrade(upg.id);
+                    if (res.ok) safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+                    else safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
+                  }}
+                  activeOpacity={0.75}
+                >
+                  {isMaxed ? (
+                    <Text style={styles.labUpgBtnTxt}>✓</Text>
+                  ) : (
+                    <View style={styles.labCostRow}>
+                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
+                      <HexaCoreIcon size={12} color={canAfford ? '#dd88ff' : '#443355'} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+
+          <TouchableOpacity style={[styles.btn, { marginTop: 18 }]} onPress={handleClose} activeOpacity={0.85}>
+            <Text style={styles.btnText}>K A P A T</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
+    </SafeAreaView>
+  );
+}
+
 // ── DyingNode — zincir sonucu silinen taşın animasyonu ────────────────────────
 // fullTravel=true  → Fermuar adımı: tam hedefe (%100) uçar, scale 0.5, 200ms
 // fullTravel=false → Yıldız adımı: %55 merkeze uçar, scale 0.22, 270ms
@@ -1998,7 +2100,7 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
 function MainMenu() {
   const hexaCore = useStore((s) => s.hexaCore);
   const setScreen = useStore((s) => s.setScreen);
-  const setLabOpen = useStore((s) => s.setLabOpen);
+  const setPreviousScreen = useStore((s) => s.setPreviousScreen);
   const soundEnabled = useStore((s) => s.soundEnabled);
   const hapticsEnabled = useStore((s) => s.hapticsEnabled);
   const toggleSound = useStore((s) => s.toggleSound);
@@ -2029,8 +2131,8 @@ function MainMenu() {
 
   const handleLab = () => {
     safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
-    setScreen('GAME');
-    setLabOpen(true);
+    setPreviousScreen('MENU');
+    setScreen('LAB');
   };
 
   const handleToggleSound = () => {
@@ -2136,10 +2238,11 @@ export default function App() {
   // Navigasyon + Lab (store'dan)
   const currentScreen = useStore((s) => s.currentScreen);
   const setScreen = useStore((s) => s.setScreen);
-  const labOpen = useStore((s) => s.labOpen);
-  const setLabOpen = useStore((s) => s.setLabOpen);
-  const handleOpenLab = useCallback(() => setLabOpen(true), [setLabOpen]);
-  const handleCloseLab = useCallback(() => setLabOpen(false), [setLabOpen]);
+  const setPreviousScreen = useStore((s) => s.setPreviousScreen);
+  const handleOpenLab = useCallback(() => {
+    setPreviousScreen('GAME');
+    setScreen('LAB');
+  }, [setPreviousScreen, setScreen]);
 
   // Sürükleme ghost durumu
   const [ghost, setGhost] = useState({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
@@ -2214,7 +2317,8 @@ export default function App() {
     }
   }, []);
 
-  // Ana Menü ekranını göster
+  // Ekran yönlendirme
+  if (currentScreen === 'LAB') return <LabScreen />;
   if (currentScreen === 'MENU') return <MainMenu />;
 
   return (
@@ -2247,9 +2351,6 @@ export default function App() {
 
       {/* Oyun Bitti Modalı */}
       <GameOverModal visible={gameOver} onOpenLab={handleOpenLab} />
-
-      {/* Prestij Market Modalı */}
-      <LabModal visible={labOpen} onClose={handleCloseLab} />
 
       {/* Başlık */}
       <View style={styles.header}>
@@ -2743,6 +2844,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+  },
+  // ── LabScreen (tam ekran mod) ─────────────────────────────────────────────
+  labScreenRoot: {
+    flex: 1,
+  },
+  labScreenInner: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   // ── EconDisplay genişletilmiş ─────────────────────────────────────────────
   econCol: {
