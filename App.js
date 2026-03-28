@@ -2,6 +2,7 @@ import React, { useRef, useCallback, useState, useEffect } from 'react';
 import {
   View,
   Text,
+  ScrollView,
   TouchableOpacity,
   StyleSheet,
   StatusBar,
@@ -10,7 +11,6 @@ import {
   PanResponder,
   Animated,
   Modal,
-  AppState,
 } from 'react-native';
 import Svg, { Polygon, Text as SvgText } from 'react-native-svg';
 import {
@@ -24,6 +24,8 @@ import {
   VibrationOnIcon,
   VibrationOffIcon,
   HomeIcon,
+  TrophyIcon,
+  HexNodeIcon,
 } from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -228,9 +230,14 @@ function formatNum(n) {
 }
 
 // Bir node'un saniye başı pasif geliri: value / 2
-function nodeIncome(value) {
-  if (!value || typeof value !== 'number' || isNaN(value)) return 1;
-  return Math.max(1, Math.floor(value / 2));
+// Zincirleme birleşmeden kazanılan skor: her adım = (yeni değer) × (adım sırası / kombo çarpanı)
+function mergeScoreFromSteps(steps) {
+  if (!steps?.length) return 0;
+  return steps.reduce((total, step) => {
+    const mergedVal = (step.cleared?.[0]?.value ?? 0) * 2; // birleşen iki taşın yeni değeri
+    const combo = step.waveIdx + 1;                    // 1'den başlayan kombo çarpanı
+    return total + mergedVal * combo;
+  }, 0);
 }
 
 // Değere göre dolgu rengi: log2(value) - 1 indeks
@@ -278,7 +285,7 @@ const PRESTIGE_UPGRADES = {
   advancedNode: {
     name: 'Gelişmiş Düğüm',
     desc: 'Dock\'taki başlangıç taşlarının seviyesi artar',
-    costs: [8, 20, 50],
+    costs: [10, 20, 50],
     maxLevel: 3,
   },
 };
@@ -307,10 +314,12 @@ function scoreToHexaCore(cells) {
   return Math.max(1, Math.floor(total / 100));
 }
 
-// Game Over: grid TAMAMEN dolu VE Kara Delik için HexaCore (5🔮) yetersizse
-function checkGameOver(cells, hexaCore = Infinity) {
-  if (cells.some((c) => c === null)) return false;
-  return hexaCore < POWER_HC_COST.blackhole; // 5 🔮
+// Game Over: grid TAMAMEN dolu VE dock parçalarından hiçbiri board ile birleşemiyorsa
+function checkGameOver(cells, nextPieces = []) {
+  if (cells.some((c) => c === null)) return false; // boş hücre varsa oyun devam eder
+  const boardVals = new Set(cells.filter(Boolean).map((c) => c.value));
+  const canMerge = (nextPieces ?? []).some((v) => v != null && boardVals.has(v));
+  return !canMerge; // hiçbir dock parçası birleşemiyorsa game over
 }
 
 // ── Hex komşuluk (odd-r offset: tek satırlar sağa kaymış) ─────────────────────
@@ -422,12 +431,8 @@ const useStore = create(
   persist(
     (set, get) => ({
       cells: Array(ROWS * COLS).fill(null),
-      credits: 50,
+      credits: 0,
       uretMaliyeti: 10,
-      lastLogin: Date.now(),
-      offlineEarned: null,
-      offlineCapReached: false,
-      tickId: 0,
       nextPieces: [pickNextValue(), pickNextValue()],
       selectedPieceIdx: 0,
       gameOver: false,
@@ -440,8 +445,11 @@ const useStore = create(
       previousState: null,        // son hamle öncesi snapshot (undo için)
       lastOverloadEvent: null,    // { cellIdx, exploded, id }
       // ── Prestij state ───────────────────────────────────────────────────────
-      hexaCore: 50,               // kalıcı prestij para birimi (başlangıç hediyesi)
+      hexaCore: 0,               // kalıcı prestij para birimi (başlangıç hediyesi)
       prestigeUpgrades: { dataFlow: 0, richStart: 0, advancedNode: 0 },
+      // ── Rekor state (kalıcı) ────────────────────────────────────────────────
+      highScore: 0,               // ulaşılan en yüksek kredi miktarı
+      maxNode: 0,                 // oluşturulan en yüksek taş değeri
       // ── Navigasyon + Global Ayarlar ─────────────────────────────────────────
       currentScreen: 'MENU',     // 'MENU' | 'GAME' | 'LAB'
       previousScreen: 'MENU',    // 'MENU' | 'GAME' — lab'ın açıldığı ekran (kalıcı değil)
@@ -455,50 +463,15 @@ const useStore = create(
       toggleHaptics: () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
       setLabOpen: (v) => set({ labOpen: v }),
 
-      addCredits: (amount) => set((s) => ({ credits: s.credits + amount })),
+      addCredits: (amount) => set((s) => {
+        const newCredits = s.credits + amount;
+        return {
+          credits: newCredits,
+          highScore: Math.max(s.highScore ?? 0, newCredits),
+        };
+      }),
 
       selectPiece: (idx) => set({ selectedPieceIdx: idx }),
-
-      calculateOffline: () => {
-        const { lastLogin, cells, prestigeUpgrades } = get();
-        const MAX_SEC = 4 * 60 * 60;
-        const elapsed = Math.floor((Date.now() - lastLogin) / 1000);
-        if (elapsed < 1) return;
-        const effective = Math.min(elapsed, MAX_SEC);
-        const capReached = elapsed >= MAX_SEC;
-        const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
-        const ips = cells.reduce((s, c) => (c ? s + nodeIncome(c.value) : s), 0);
-        const earned = Math.floor(effective * ips * mult);
-        if (earned >= 10) {
-          set({ offlineEarned: earned, offlineCapReached: capReached, lastLogin: Date.now() });
-        } else if (earned > 0) {
-          set((s) => ({ credits: s.credits + earned, offlineCapReached: false, lastLogin: Date.now() }));
-        } else {
-          set({ lastLogin: Date.now() });
-        }
-      },
-
-      collectOffline: () => {
-        const { offlineEarned } = get();
-        set((s) => ({
-          credits: s.credits + (offlineEarned ?? 0),
-          offlineEarned: null,
-          offlineCapReached: false,
-          lastLogin: Date.now(),
-        }));
-      },
-
-      tickIncome: () => {
-        const { cells, prestigeUpgrades } = get();
-        const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
-        const income = cells.reduce((s, c) => (c ? s + nodeIncome(c.value) : s), 0);
-        const boosted = Math.floor(income * mult);
-        set((s) => ({
-          credits: boosted > 0 ? s.credits + boosted : s.credits,
-          lastLogin: Date.now(),
-          tickId: s.tickId + 1,
-        }));
-      },
 
       // Seçili parçayı rastgele boş hücreye yerleştirir
       buyNode: () => {
@@ -513,15 +486,20 @@ const useStore = create(
         const cr = runChainMerge(placed, idx);
         const newPieces = [...nextPieces];
         newPieces[pieceIdx] = pickNextValue();
-        set({
+        const score = mergeScoreFromSteps(cr.steps);
+        set((s) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, s.hexaCore),
+          gameOver: checkGameOver(cr.cells, newPieces),
+          ...(score > 0 ? {
+            credits: s.credits + score,
+            highScore: Math.max(s.highScore ?? 0, s.credits + score),
+          } : {}),
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
-        });
+        }));
         return true;
       },
 
@@ -536,15 +514,20 @@ const useStore = create(
         const cr = runChainMerge(placed, cellIdx);
         const newPieces = [...nextPieces];
         newPieces[pieceIdx] = pickNextValue();
-        set({
+        const score = mergeScoreFromSteps(cr.steps);
+        set((s) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, s.hexaCore),
+          gameOver: checkGameOver(cr.cells, newPieces),
+          ...(score > 0 ? {
+            credits: s.credits + score,
+            highScore: Math.max(s.highScore ?? 0, s.credits + score),
+          } : {}),
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
-        });
+        }));
         return true;
       },
 
@@ -579,35 +562,49 @@ const useStore = create(
           };
           const allSteps = [step0, ...cr.steps.map((st, i) => ({ ...st, waveIdx: i + 1 }))];
           const allCleared = [step0.cleared[0], ...cr.cleared];
-          set({
+          const newMaxNode_m = cr.cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+          const score_m = mergeScoreFromSteps(allSteps);
+          set((st) => ({
             cells: cr.cells,
             nextPieces: newPieces,
             selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-            gameOver: checkGameOver(cr.cells, s.hexaCore),
+            gameOver: checkGameOver(cr.cells, newPieces),
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
+            maxNode: Math.max(s.maxNode ?? 0, newMaxNode_m),
+            ...(score_m > 0 ? {
+              credits: st.credits + score_m,
+              highScore: Math.max(st.highScore ?? 0, st.credits + score_m),
+            } : {}),
             lastChainEvent: {
               steps: allSteps, cleared: allCleared,
               finalMergedAt: cr.mergedAt, chainDepth: allSteps.length, id: cr.id,
             },
-          });
+          }));
           return { ok: true, merged: true };
         }
 
         // Boş hücre → normal yerleştir
         working[cellIdx] = { value: valueToPlace };
         const cr = runChainMerge(working, cellIdx);
-        set({
+        const newMaxNode_e = cr.cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+        const score_e = mergeScoreFromSteps(cr.steps);
+        set((st) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, s.hexaCore),
+          gameOver: checkGameOver(cr.cells, newPieces),
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
+          maxNode: Math.max(s.maxNode ?? 0, newMaxNode_e),
+          ...(score_e > 0 ? {
+            credits: st.credits + score_e,
+            highScore: Math.max(st.highScore ?? 0, st.credits + score_e),
+          } : {}),
           lastChainEvent: cr.steps.length > 0
             ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
             : null,
-        });
+        }));
         return { ok: true };
       },
 
@@ -641,16 +638,21 @@ const useStore = create(
           };
           const allSteps = [step0, ...cr.steps.map((st, i) => ({ ...st, waveIdx: i + 1 }))];
           const allCleared = [step0.cleared[0], ...cr.cleared];
-          set({
+          const score_rd = mergeScoreFromSteps(allSteps);
+          set((st) => ({
             cells: cr.cells,
-            gameOver: checkGameOver(cr.cells, s.hexaCore),
+            gameOver: checkGameOver(cr.cells, s.nextPieces),
             lockedCells: decrementLocks(lockedCells),
             previousState: snap,
+            ...(score_rd > 0 ? {
+              credits: st.credits + score_rd,
+              highScore: Math.max(st.highScore ?? 0, st.credits + score_rd),
+            } : {}),
             lastChainEvent: {
               steps: allSteps, cleared: allCleared,
               finalMergedAt: cr.mergedAt, chainDepth: allSteps.length, id: cr.id,
             },
-          });
+          }));
           return { result: 'merged', chainDepth: allSteps.length };
         }
 
@@ -667,15 +669,20 @@ const useStore = create(
         const allCleared = [...chain1.cleared, ...chain2.cleared];
         const totalDepth = allSteps.length;
         const primaryMergedAt = chain1.steps.length >= chain2.steps.length ? chain1.mergedAt : chain2.mergedAt;
-        set({
+        const score_sw = mergeScoreFromSteps(allSteps);
+        set((st) => ({
           cells: chain2.cells,
-          gameOver: checkGameOver(chain2.cells, s.hexaCore),
+          gameOver: checkGameOver(chain2.cells, s.nextPieces),
           lockedCells: decrementLocks(lockedCells),
           previousState: snap,
+          ...(score_sw > 0 ? {
+            credits: st.credits + score_sw,
+            highScore: Math.max(st.highScore ?? 0, st.credits + score_sw),
+          } : {}),
           lastChainEvent: allSteps.length > 0
             ? { steps: allSteps, cleared: allCleared, finalMergedAt: primaryMergedAt, chainDepth: totalDepth, id: chain1.id }
             : null,
-        });
+        }));
         return { result: 'swapped', chainDepth: totalDepth };
       },
 
@@ -706,7 +713,7 @@ const useStore = create(
           lockedCells: { ...s.lockedCells, [cellIdx]: 3 },
           previousState: snap,
           activePowerUp: null,
-          gameOver: checkGameOver(newCells, s.hexaCore - cost),
+          gameOver: checkGameOver(newCells, s.nextPieces),
           lastChainEvent: null,
         });
         return { ok: true };
@@ -744,19 +751,24 @@ const useStore = create(
         // Zincir tetiklenirse bonus HexaCore (derinlik * 1)
         const bonusHC = chainTriggered ? Math.min(totalDepth, 5) : 0;
         const primaryMergedAt = chain1.steps.length >= chain2.steps.length ? chain1.mergedAt : chain2.mergedAt;
-        set({
+        const score_wh = mergeScoreFromSteps(allSteps);
+        set((st) => ({
           cells: chain2.cells,
           hexaCore: s.hexaCore - cost + bonusHC,
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
           activePowerUp: null,
           wormholeFirstIdx: null,
-          gameOver: checkGameOver(chain2.cells, s.hexaCore),
+          gameOver: checkGameOver(chain2.cells, s.nextPieces),
+          ...(score_wh > 0 ? {
+            credits: st.credits + score_wh,
+            highScore: Math.max(st.highScore ?? 0, st.credits + score_wh),
+          } : {}),
           lastChainEvent: allSteps.length > 0
             ? { steps: allSteps, cleared: allCleared, finalMergedAt: primaryMergedAt, chainDepth: totalDepth, id: chain1.id }
             : null,
-        });
-        return { ok: true, chainTriggered, bonusCredits };
+        }));
+        return { ok: true, chainTriggered };
       },
 
       // Aşırı Yükleme: %70 bir üst seviye, %30 patlama
@@ -772,18 +784,25 @@ const useStore = create(
           const boosted = [...s.cells];
           boosted[cellIdx] = { value: s.cells[cellIdx].value * 2 };
           const cr = runChainMerge(boosted, cellIdx);
-          set({
+          const newMaxNode_ol = cr.cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+          const score_ol = mergeScoreFromSteps(cr.steps);
+          set((st) => ({
             cells: cr.cells,
             hexaCore: s.hexaCore - cost,
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(cr.cells, s.hexaCore - cost),
+            gameOver: checkGameOver(cr.cells, s.nextPieces),
+            maxNode: Math.max(s.maxNode ?? 0, newMaxNode_ol),
+            ...(score_ol > 0 ? {
+              credits: st.credits + score_ol,
+              highScore: Math.max(st.highScore ?? 0, st.credits + score_ol),
+            } : {}),
             lastChainEvent: cr.steps.length > 0
               ? { steps: cr.steps, cleared: cr.cleared, finalMergedAt: cr.mergedAt, chainDepth: cr.chainDepth, id: cr.id }
               : null,
             lastOverloadEvent: { cellIdx, exploded: false, id },
-          });
+          }));
           return { ok: true, exploded: false };
         } else {
           // Patlama: hücre yok olur
@@ -795,7 +814,7 @@ const useStore = create(
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(exploded, s.hexaCore - cost),
+            gameOver: checkGameOver(exploded, s.nextPieces),
             lastChainEvent: null,
             lastOverloadEvent: { cellIdx, exploded: true, id },
           });
@@ -829,18 +848,18 @@ const useStore = create(
         const { cells, prestigeUpgrades } = get();
         const earned = scoreToHexaCore(cells);
         const richStart = prestigeUpgrades?.richStart ?? 0;
-        const startCredits = 50 + 500 * richStart;
+        const startCredits = 0;
+        const finalMaxNode = cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
         set((s) => ({
           hexaCore: s.hexaCore + earned,
+          // maxNode'u son kez güncelle (highScore addCredits/tickIncome ile zaten güncellendi)
+          maxNode: Math.max(s.maxNode ?? 0, finalMaxNode),
           cells: Array(ROWS * COLS).fill(null),
           credits: startCredits,
           uretMaliyeti: 10,
           nextPieces: [pickNextValue(), pickNextValue()],
           selectedPieceIdx: 0,
           gameOver: false,
-          offlineEarned: null,
-          offlineCapReached: false,
-          lastLogin: Date.now(),
           activePowerUp: null,
           wormholeFirstIdx: null,
           lockedCells: {},
@@ -871,14 +890,11 @@ const useStore = create(
         const richStart = prestigeUpgrades?.richStart ?? 0;
         set({
           cells: Array(ROWS * COLS).fill(null),
-          credits: 50 + 500 * richStart,
+          credits: 500 * richStart,
           uretMaliyeti: 10,
           nextPieces: [pickNextValue(), pickNextValue()],
           selectedPieceIdx: 0,
           gameOver: false,
-          offlineEarned: null,
-          offlineCapReached: false,
-          lastLogin: Date.now(),
           activePowerUp: null,
           wormholeFirstIdx: null,
           lockedCells: {},
@@ -889,13 +905,12 @@ const useStore = create(
       },
     }),
     {
-      name: 'hexanode-storage-v9',
+      name: 'hexanode-storage-v12',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         cells: s.cells,
         credits: s.credits,
         uretMaliyeti: s.uretMaliyeti,
-        lastLogin: s.lastLogin,
         nextPieces: s.nextPieces,
         selectedPieceIdx: s.selectedPieceIdx,
         gameOver: s.gameOver,
@@ -905,6 +920,8 @@ const useStore = create(
         prestigeUpgrades: s.prestigeUpgrades,
         soundEnabled: s.soundEnabled,
         hapticsEnabled: s.hapticsEnabled,
+        highScore: s.highScore,
+        maxNode: s.maxNode,
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) return;
@@ -915,8 +932,6 @@ const useStore = create(
         );
         if (wrongSize || hasBadCells) {
           setTimeout(() => useStore.getState().resetGame(), 0);
-        } else {
-          setTimeout(() => useStore.getState().calculateOffline(), 0);
         }
       },
     }
@@ -945,20 +960,10 @@ function AnimatedPressable({ onPress, style, children, activeOpacity = 1 }) {
 function EconDisplay({ onOpenLab }) {
   const credits = useStore((s) => s.credits);
   const hexaCore = useStore((s) => s.hexaCore);
-  const cells = useStore((s) => s.cells);
-  const prestigeUpgrades = useStore((s) => s.prestigeUpgrades);
-
-  const mult = 1 + 0.1 * (prestigeUpgrades?.dataFlow ?? 0);
-  const baseIncome = cells.reduce((sum, cell) => (cell ? sum + nodeIncome(cell.value) : sum), 0);
-  const incomePerSec = Math.floor(baseIncome * mult);
 
   return (
     <View style={styles.econCol}>
-      <View style={styles.econRow}>
-        <Text style={styles.econCredits}>{formatNum(credits)} ✦</Text>
-        <Text style={styles.econSep}>  ·  </Text>
-        <Text style={styles.econIncome}>+{formatNum(incomePerSec)}/sn</Text>
-      </View>
+      <Text style={styles.econCredits}>{formatNum(credits)} ✦</Text>
       <TouchableOpacity style={styles.hexaCoreRow} onPress={onOpenLab} activeOpacity={0.75}>
         <HexaCoreIcon size={13} color="#aa44ff" />
         <Text style={styles.hexaCoreText}> {hexaCore}  HexaCore</Text>
@@ -997,40 +1002,6 @@ function FloatingText({ x, y, text, onDone, textStyle }) {
     >
       <Text style={[styles.floatText, textStyle]}>{text}</Text>
     </Animated.View>
-  );
-}
-
-// ── FloatingTextsLayer ────────────────────────────────────────────────────────
-function FloatingTextsLayer() {
-  const cells = useStore((s) => s.cells);
-  const tickId = useStore((s) => s.tickId);
-  const [floats, setFloats] = useState([]);
-  const lastTickRef = useRef(-1);
-
-  useEffect(() => {
-    if (tickId === 0 || tickId === lastTickRef.current) return;
-    lastTickRef.current = tickId;
-
-    const spawned = [];
-    cells.forEach((cell, idx) => {
-      if (!cell) return;
-      const income = nodeIncome(cell.value);
-      const { cx, cy } = CELLS[idx];
-      spawned.push({ id: `${tickId}-${idx}`, x: cx, y: cy, text: `+${formatNum(income)}` });
-    });
-    if (spawned.length > 0) setFloats((prev) => [...prev, ...spawned]);
-  }, [tickId, cells]);
-
-  const removeFloat = useCallback((id) => {
-    setFloats((prev) => prev.filter((f) => f.id !== id));
-  }, []);
-
-  return (
-    <>
-      {floats.map((f) => (
-        <FloatingText key={f.id} x={f.x} y={f.y} text={f.text} onDone={() => removeFloat(f.id)} />
-      ))}
-    </>
   );
 }
 
@@ -1237,6 +1208,7 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onD
 // ── GameOverModal ─────────────────────────────────────────────────────────────
 function GameOverModal({ visible, onOpenLab }) {
   const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
+  const setScreen = useStore((s) => s.setScreen);
   const cells = useStore((s) => s.cells);
   const best = cells.reduce((max, c) => (c && c.value > max ? c.value : max), 0);
   const earned = scoreToHexaCore(cells);
@@ -1278,6 +1250,99 @@ function GameOverModal({ visible, onOpenLab }) {
   const glowShadow = glowAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [4, 14],
+  });
+
+  const FLOATING_NODES = [
+    { id: 1, val: '2', size: 45, left: width * 0.1, top: height * 0.15, color: '#aa44ff', duration: 3000 },
+    { id: 2, val: '8', size: 55, left: width * 0.75, top: height * 0.25, color: '#00ffe0', duration: 3500 },
+    { id: 3, val: '64', size: 35, left: width * 0.8, top: height * 0.65, color: '#ffcc44', duration: 2800 },
+    { id: 4, val: '256', size: 65, left: width * 0.12, top: height * 0.70, color: '#ff44aa', duration: 4000 },
+    { id: 5, val: '1024', size: 50, left: width * 0.5, top: height * 0.45, color: '#44aaff', duration: 3200 },
+  ];
+
+  const FloatingNodeItem = ({ item }) => {
+    const floatAnim = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+      // Yukarı aşağı sonsuz süzülme animasyonu
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(floatAnim, {
+            toValue: 15, // 15 piksel aşağı
+            duration: item.duration,
+            useNativeDriver: true,
+          }),
+          Animated.timing(floatAnim, {
+            toValue: -10, // 10 piksel yukarı (başlangıcın da üstüne)
+            duration: item.duration,
+            useNativeDriver: true,
+          }),
+          Animated.timing(floatAnim, {
+            toValue: 0,
+            duration: item.duration,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    }, [floatAnim, item.duration]);
+
+    return (
+      <Animated.View
+        style={[
+          bgStyles.nodeWrap,
+          {
+            width: item.size,
+            height: item.size,
+            left: item.left,
+            top: item.top,
+            borderColor: item.color,
+            shadowColor: item.color,
+            transform: [{ translateY: floatAnim }],
+          }
+        ]}
+      >
+        {/* Eğer elinde hazır bir <HexNodeIcon /> varsa buradaki Text'in arkasına/yerine koyabilirsin */}
+        <Text style={[bgStyles.nodeText, { color: item.color, fontSize: item.size * 0.35, textShadowColor: item.color }]}>
+          {item.val}
+        </Text>
+      </Animated.View>
+    );
+  };
+
+  const FloatingBackground = () => {
+    return (
+      <View style={bgStyles.container} pointerEvents="none">
+        {FLOATING_NODES.map(node => (
+          <FloatingNodeItem key={node.id} item={node} />
+        ))}
+      </View>
+    );
+  };
+
+  const bgStyles = StyleSheet.create({
+    container: {
+      ...StyleSheet.absoluteFillObject, // Arka planı tamamen kaplar
+      zIndex: -1, // Diğer butonların/arayüzün arkasında kalmasını sağlar
+      overflow: 'hidden',
+    },
+    nodeWrap: {
+      position: 'absolute',
+      borderWidth: 1.5,
+      borderRadius: 12, // Hexagon hissiyatı için köşeleri kıvrılmış çerçeve
+      backgroundColor: 'rgba(11, 5, 32, 0.4)', // Yarı saydam karanlık iç plan
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.6,
+      shadowRadius: 12,
+      elevation: 5,
+    },
+    nodeText: {
+      fontWeight: '300',
+      letterSpacing: 2,
+      textShadowOffset: { width: 0, height: 0 },
+      textShadowRadius: 8,
+    }
   });
 
   return (
@@ -1342,9 +1407,23 @@ function GameOverModal({ visible, onOpenLab }) {
               }}
               activeOpacity={0.82}
             >
-              <Text style={styles.goLabTxt}>LABORATUVAR</Text>
+              <Text style={styles.goLabTxt}>MAĞAZA</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Ana Menü butonu — daha sade hiyerarşik buton */}
+          <TouchableOpacity
+            style={styles.goMenuBtn}
+            onPress={() => {
+              safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+              collectPrestigeAndReset();
+              setScreen('MENU');
+            }}
+            activeOpacity={0.75}
+          >
+            <HomeIcon size={14} color="#aaaacc" />
+            <Text style={styles.goMenuTxt}>  ANA MENÜ</Text>
+          </TouchableOpacity>
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -2096,15 +2175,111 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
   );
 }
 
+// ── GuideModal: Sistem Rehberi ───────────────────────────────────────────────
+const GUIDE_ITEMS = [
+  {
+    IconComp: HexNodeIcon,
+    iconColor: '#00ffe0',
+    title: 'SÜRÜKLE & BİRLEŞTİR',
+    desc: 'Alttaki taşları boş hücrelere veya aynı değerli taşların üstüne sürükle. Yerleştirince otomatik zincir kontrolü başlar.',
+  },
+  {
+    IconComp: WormholeIcon,
+    iconColor: '#00ffe0',
+    title: 'TAHTA KİLİTLİ',
+    desc: 'Tahtadaki taşlar hareket edemez! Sadece Solucan Deliği (Wormhole) güç-upu ile iki taşın yerini değiştirebilirsin.',
+  },
+  {
+    IconComp: OverloadIcon,
+    iconColor: '#ffdd00',
+    title: 'ZİNCİRLEME REAKSİYON',
+    desc: 'Yan yana duran aynı taşlar anında birleşerek seviye atlar. Kombo ne kadar uzun olursa kredi ödülü o kadar büyür.',
+  },
+  {
+    IconComp: HexaCoreIcon,
+    iconColor: '#aa44ff',
+    title: 'HEXACORE ENERJİSİ',
+    desc: 'Oyun bitince tahtadaki taşlar HexaCore\'a dönüşür. Joker yeteneklerde ve Laboratuvar\'da kalıcı güçlenme için kullan.',
+  },
+];
+
+function GuideModal({ visible, onClose }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 14, bounciness: 6, useNativeDriver: true }),
+      ]).start();
+    } else {
+      fadeAnim.setValue(0);
+      slideAnim.setValue(30);
+    }
+  }, [visible]);
+
+  if (!visible) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <Animated.View style={[guideStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[guideStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+
+          {/* Başlık */}
+          <Text style={guideStyles.title}>SİSTEM REHBERİ</Text>
+          <Text style={guideStyles.subtitle}>N A S I L   O Y N A N I R ?</Text>
+          <View style={guideStyles.titleLine} />
+
+          {/* Madde madde rehber — kaydırılabilir */}
+          <ScrollView
+            style={guideStyles.scrollArea}
+            contentContainerStyle={guideStyles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            bounces={false}
+          >
+            {GUIDE_ITEMS.map((item, i) => {
+              const { IconComp, iconColor, title, desc } = item;
+              return (
+                <View key={i} style={guideStyles.item}>
+                  <View style={[guideStyles.itemIconWrap, { borderColor: iconColor }]}>
+                    <IconComp size={26} color={iconColor} />
+                  </View>
+                  <View style={guideStyles.itemText}>
+                    <Text style={[guideStyles.itemTitle, { color: iconColor }]}>{title}</Text>
+                    <Text style={guideStyles.itemDesc}>{desc}</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+
+          <View style={guideStyles.titleLine} />
+
+          {/* Kapat Butonu */}
+          <TouchableOpacity style={guideStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={guideStyles.closeBtnText}>KAPAT</Text>
+          </TouchableOpacity>
+
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
 // ── MainMenu ────────────────────────────────────────────────────────────────────
 function MainMenu() {
   const hexaCore = useStore((s) => s.hexaCore);
+  const highScore = useStore((s) => s.highScore ?? 0);
+  const maxNode = useStore((s) => s.maxNode ?? 0);
   const setScreen = useStore((s) => s.setScreen);
   const setPreviousScreen = useStore((s) => s.setPreviousScreen);
   const soundEnabled = useStore((s) => s.soundEnabled);
   const hapticsEnabled = useStore((s) => s.hapticsEnabled);
   const toggleSound = useStore((s) => s.toggleSound);
   const toggleHaptics = useStore((s) => s.toggleHaptics);
+
+  const [guideOpen, setGuideOpen] = useState(false);
 
   // Başlık için animasyonlu parlama
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -2168,71 +2343,87 @@ function MainMenu() {
         </View>
       </View>
 
+      {/* ── Kayıtlı Veri: Rekor Vitrini ─────────────────────────────── */}
+      <View style={menuStyles.recordBox}>
+        <Text style={menuStyles.recordBoxTitle}>K A Y I T L I   V E R İ</Text>
+        <View style={menuStyles.recordRow}>
+          <View style={menuStyles.recordItem}>
+            <TrophyIcon size={24} color="#ffcc44" />
+            <Text style={menuStyles.recordLabel}>REKOR SKOR</Text>
+            <Text style={menuStyles.recordVal}>{formatNum(highScore)}</Text>
+          </View>
+          <View style={menuStyles.recordDivider} />
+          <View style={menuStyles.recordItem}>
+            <HexNodeIcon size={24} color="#00ffe0" />
+            <Text style={menuStyles.recordLabel}>EN YÜKSEK NOD</Text>
+            <Text style={[menuStyles.recordVal, menuStyles.recordValCyan]}>{formatNum(maxNode)}</Text>
+          </View>
+        </View>
+      </View>
+
       {/* ── Orta: Ana Butonlar ───────────────────────────────────────── */}
       <View style={menuStyles.midSection}>
         <TouchableOpacity style={menuStyles.playBtn} onPress={handlePlay} activeOpacity={0.82}>
           <View style={menuStyles.playBtnInner}>
-            <Text style={menuStyles.playBtnText}>SİSTEME GİRİŞ</Text>
-            <Text style={menuStyles.playBtnSub}>O Y N A</Text>
+            <Text style={menuStyles.playBtnText}>OYUNA BAŞLA</Text>
           </View>
         </TouchableOpacity>
 
         <TouchableOpacity style={menuStyles.labBtn} onPress={handleLab} activeOpacity={0.82}>
-          <Text style={menuStyles.labBtnText}>LABORATUVAR</Text>
-          <View style={menuStyles.labBtnHcRow}>
-            <HexaCoreIcon size={14} color="#aa44ff" />
-            <Text style={menuStyles.labBtnSub}> Prestij Marketi</Text>
-          </View>
+          <Text style={menuStyles.labBtnText}>MAĞAZA</Text>
         </TouchableOpacity>
       </View>
 
-      {/* ── Alt: Ayarlar ─────────────────────────────────────────────── */}
+      {/* ── Alt: Ayarlar (İkon butonları) ───────────────────────────── */}
       <View style={menuStyles.bottomSection}>
         <Text style={menuStyles.settingsLabel}>A Y A R L A R</Text>
-        <View style={menuStyles.toggleRow}>
+        <View style={menuStyles.settingsIconRow}>
 
           {/* Ses Toggleu */}
           <TouchableOpacity
-            style={[menuStyles.toggleBtn, soundEnabled && menuStyles.toggleBtnOn]}
+            style={[menuStyles.settingIconBtn, soundEnabled && menuStyles.settingIconBtnOn]}
             onPress={handleToggleSound}
-            activeOpacity={0.78}
+            activeOpacity={0.75}
           >
             {soundEnabled
-              ? <SoundOnIcon size={30} color="#aa44ff" />
-              : <SoundOffIcon size={30} color="#444455" />}
-            <Text style={[menuStyles.toggleLabel, soundEnabled ? menuStyles.toggleLabelOn : menuStyles.toggleLabelOff]}>
-              {soundEnabled ? 'SES AÇIK' : 'SES KAPALI'}
-            </Text>
+              ? <SoundOnIcon size={28} color="#aa44ff" />
+              : <SoundOffIcon size={28} color="#444455" />}
           </TouchableOpacity>
 
           {/* Titreşim Toggleu */}
           <TouchableOpacity
-            style={[menuStyles.toggleBtn, hapticsEnabled && menuStyles.toggleBtnOn]}
+            style={[menuStyles.settingIconBtn, hapticsEnabled && menuStyles.settingIconBtnOn]}
             onPress={handleToggleHaptics}
-            activeOpacity={0.78}
+            activeOpacity={0.75}
           >
             {hapticsEnabled
-              ? <VibrationOnIcon size={30} color="#aa44ff" />
-              : <VibrationOffIcon size={30} color="#444455" />}
-            <Text style={[menuStyles.toggleLabel, hapticsEnabled ? menuStyles.toggleLabelOn : menuStyles.toggleLabelOff]}>
-              {hapticsEnabled ? 'TİTREŞİM AÇIK' : 'TİTREŞİM KAPALI'}
-            </Text>
+              ? <VibrationOnIcon size={28} color="#aa44ff" />
+              : <VibrationOffIcon size={28} color="#444455" />}
+          </TouchableOpacity>
+
+          {/* Sistem Rehberi */}
+          <TouchableOpacity
+            style={[menuStyles.settingIconBtn, menuStyles.settingIconBtnGuide]}
+            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setGuideOpen(true); }}
+            activeOpacity={0.75}
+          >
+            <Text style={menuStyles.guideBtnText}>?</Text>
           </TouchableOpacity>
 
         </View>
       </View>
+
+      {/* Sistem Rehberi Modal */}
+      <GuideModal visible={guideOpen} onClose={() => setGuideOpen(false)} />
     </SafeAreaView>
   );
 }
 
 // ── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const collectOffline = useStore((s) => s.collectOffline);
   const cells = useStore((s) => s.cells);
   const credits = useStore((s) => s.credits);
   const uretMaliyeti = useStore((s) => s.uretMaliyeti);
-  const offlineEarned = useStore((s) => s.offlineEarned);
-  const offlineCapReached = useStore((s) => s.offlineCapReached);
   const nextPieces = useStore((s) => s.nextPieces);
   const gameOver = useStore((s) => s.gameOver);
   // Navigasyon + Lab (store'dan)
@@ -2255,31 +2446,9 @@ export default function App() {
     setScreen('MENU');
   }, [setScreen]);
 
-  const modalVisible = offlineEarned != null && offlineEarned > 0;
   const canDrag = true; // TEST: kredi sınırı kapalı
 
   useEffect(() => { initAudio(); }, []);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      if (AppState.currentState !== 'active') return;
-      useStore.getState().tickIncome();
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  const appState = useRef(AppState.currentState);
-  useEffect(() => {
-    const sub = AppState.addEventListener('change', (next) => {
-      if (appState.current.match(/inactive|background/) && next === 'active') {
-        useStore.getState().calculateOffline();
-      }
-      appState.current = next;
-    });
-    return () => sub.remove();
-  }, []);
-
-  const handleCollect = useCallback(() => { collectOffline(); }, [collectOffline]);
 
   const handleGridMeasure = useCallback((px, py) => {
     gridAbsPos.current = { x: px, y: py };
@@ -2324,30 +2493,6 @@ export default function App() {
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
-
-      {/* Çevrimdışı Kazanç Modalı */}
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={handleCollect}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>AĞ ÇALIŞMAYA DEVAM ETTİ</Text>
-            <Text style={styles.modalAmount}>+ {formatNum(offlineEarned ?? 0)} ✦</Text>
-            {offlineCapReached && (
-              <Text style={styles.offlineCapNote}>
-                Maksimum kapasiteye ulaşıldı (4 Saat)
-              </Text>
-            )}
-            <AnimatedPressable style={styles.btn} onPress={handleCollect} activeOpacity={0.9}>
-              <Text style={styles.btnText}>T O P L A</Text>
-            </AnimatedPressable>
-          </View>
-        </View>
-      </Modal>
 
       {/* Oyun Bitti Modalı */}
       <GameOverModal visible={gameOver} onOpenLab={handleOpenLab} />
@@ -2738,6 +2883,25 @@ const styles = StyleSheet.create({
   },
   // (eski goLabBtnText artık kullanılmıyor — uyumluluk için boş bırak)
   goLabBtnText: {},
+  goMenuBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1,
+    borderColor: '#33334a',
+    alignSelf: 'center',
+  },
+  goMenuTxt: {
+    color: '#aaaacc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.025),
+    fontWeight: '600',
+    letterSpacing: 1.2,
+  },
   goDivider: {
     width: '80%',
     height: 1,
@@ -2965,10 +3129,10 @@ const menuStyles = StyleSheet.create({
   },
   // ── Üst: Logo ────────────────────────────────────────────────────────────
   topSection: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: Math.round(SCREEN_WIDTH * 0.04),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.10),
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
   },
   logoWrap: {
     alignItems: 'center',
@@ -3032,20 +3196,18 @@ const menuStyles = StyleSheet.create({
   },
   playBtn: {
     width: '90%',
+    height: 70, // Yükseklik kesin olarak sabitlendi
     borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#9944ff',
     backgroundColor: '#1a0535',
     overflow: 'hidden',
-    shadowColor: '#aa44ff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 14,
-    elevation: 8,
+    justifyContent: 'center', // İçeriği dikeyde tam ortala
+    marginBottom: Math.round(SCREEN_WIDTH * 0.03), // Alt kısımla hafif boşluk
   },
   playBtnInner: {
     alignItems: 'center',
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.055),
+    // DİKKAT: paddingVertical buradan tamamen silindi çünkü height verdik!
   },
   playBtnText: {
     color: '#ffffff',
@@ -3053,43 +3215,22 @@ const menuStyles = StyleSheet.create({
     fontWeight: '300',
     letterSpacing: 7,
   },
-  playBtnSub: {
-    color: '#7733cc',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '200',
-    letterSpacing: 10,
-    marginTop: 4,
-  },
   labBtn: {
     width: '90%',
-    borderRadius: 12,
-    borderWidth: 1,
+    height: 70, // OYUNA BAŞLA butonu ile milimetrik aynı yükseklik!
+    borderRadius: 14,
+    borderWidth: 1.5, // Çerçeve kalınlığı eşitlendi
     borderColor: '#3a1a6a',
     backgroundColor: '#0f0625',
     alignItems: 'center',
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.038),
-    shadowColor: '#6600aa',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center', // İçeriği dikeyde tam ortala
+    // DİKKAT: paddingVertical buradan tamamen silindi!
   },
   labBtnText: {
-    color: '#cc88ff',
+    color: '#ffffff',
     fontSize: Math.round(SCREEN_WIDTH * 0.040),
-    fontWeight: '200',
+    fontWeight: '300',
     letterSpacing: 6,
-  },
-  labBtnHcRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 5,
-  },
-  labBtnSub: {
-    color: '#5533aa',
-    fontSize: Math.round(SCREEN_WIDTH * 0.026),
-    fontWeight: '200',
-    letterSpacing: 2,
   },
   // ── Alt: Ayarlar ─────────────────────────────────────────────────────────
   bottomSection: {
@@ -3105,33 +3246,205 @@ const menuStyles = StyleSheet.create({
     letterSpacing: 6,
     marginBottom: 14,
   },
-  toggleRow: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-  toggleBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderRadius: 12,
+  // ── Eski toggleRow/toggleBtn (artık kullanılmıyor, temiz bırakıyoruz) ───────
+  toggleLabelOn: { color: '#8844cc' },
+  toggleLabelOff: { color: '#333355' },
+  // ── Rekor Vitrini ───────────────────────────────────────────────────────────
+  recordBox: {
+    marginHorizontal: Math.round(SCREEN_WIDTH * 0.01),
+    marginBottom: Math.round(SCREEN_WIDTH * 0.02),
     borderWidth: 1,
-    borderColor: '#222233',
+    borderColor: '#2a1a5a',
+    borderRadius: 12,
     backgroundColor: '#0b0520',
-    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
   },
-  toggleBtnOn: {
-    borderColor: '#4a1a8a',
-    backgroundColor: '#120835',
+  recordBoxTitle: {
+    color: '#ffffff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.019),
+    fontWeight: '300',
+    letterSpacing: 4,
+    textAlign: 'center',
+    marginBottom: 8,
   },
-  toggleLabel: {
-    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+  recordRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  recordItem: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 4,
+  },
+  recordLabel: {
+    color: '#ffffff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.019),
     fontWeight: '300',
     letterSpacing: 2,
   },
-  toggleLabelOn: {
-    color: '#8844cc',
+  recordVal: {
+    color: '#ffcc44',
+    fontSize: Math.round(SCREEN_WIDTH * 0.044),
+    fontWeight: '200',
+    letterSpacing: 2,
+    textShadowColor: '#ffaa00',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
   },
-  toggleLabelOff: {
-    color: '#333355',
+  recordValCyan: {
+    color: '#00ffe0',
+    textShadowColor: '#00ccaa',
+  },
+  recordDivider: {
+    width: 1,
+    height: 44,
+    backgroundColor: '#2a1a5a',
+  },
+  // ── Ayar İkon Butonları (kompakt, 60×60) ────────────────────────────────────
+  settingsIconRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 20,
+  },
+  settingIconBtn: {
+    width: 60,
+    height: 60,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#222233',
+    backgroundColor: '#0b0520',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingIconBtnOn: {
+    borderColor: '#4a1a8a',
+    backgroundColor: '#120835',
+    shadowColor: '#7733cc',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  settingIconBtnGuide: {
+    borderColor: '#3a2266',
+    backgroundColor: '#0d0428',
+  },
+  guideBtnText: {
+    color: '#aa44ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.060),
+    fontWeight: '100',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.066),
+    textShadowColor: '#aa44ff',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+  },
+});
+
+// ── GuideModal Stilleri ──────────────────────────────────────────────────────
+const guideStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 4, 10, 0.93)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 420,
+    maxHeight: '88%',
+    backgroundColor: '#0f0b24',
+    borderWidth: 1.5,
+    borderColor: '#5522aa',
+    borderRadius: 16,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.055),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.050),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.040),
+    shadowColor: '#7733cc',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+  scrollArea: {
+    flexGrow: 0,
+  },
+  scrollContent: {
+    paddingBottom: 4,
+  },
+  title: {
+    color: '#cc66ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.060),
+    fontWeight: '200',
+    letterSpacing: 6,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  subtitle: {
+    color: '#4a2a7a',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '300',
+    letterSpacing: 5,
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  titleLine: {
+    height: 1,
+    backgroundColor: '#2a1a5a',
+    marginVertical: 14,
+  },
+  item: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 14,
+    gap: 12,
+  },
+  itemIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0b0520',
+    flexShrink: 0,
+  },
+  itemText: {
+    flex: 1,
+    flexShrink: 1,
+  },
+  itemTitle: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontWeight: '600',
+    letterSpacing: 2,
+    marginBottom: 4,
+  },
+  itemDesc: {
+    color: '#7766aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.040),
+  },
+  closeBtn: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#6622cc',
+    backgroundColor: '#1a0840',
+    shadowColor: '#aa44ff',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  closeBtnText: {
+    color: '#cc88ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.036),
+    fontWeight: '300',
+    letterSpacing: 6,
   },
 });

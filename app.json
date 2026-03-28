@@ -4,6 +4,7 @@
     "slug": "hexanode",
     "version": "1.0.0",
     "orientation": "portrait",
+    "backgroundColor": "#04040a",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {

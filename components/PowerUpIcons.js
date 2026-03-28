@@ -132,6 +132,37 @@ export const VibrationOffIcon = ({ size = 28, color = '#444455' }) => (
   </Svg>
 );
 
+// ── Rekor Vitrini: Taç (highScore) ────────────────────────────────────────────
+export const TrophyIcon = ({ size = 28, color = '#ffcc44' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M6 2h12v8a6 6 0 0 1-12 0V2z"
+      fill={color} fillOpacity="0.18"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path d="M2 4h4v4a2 2 0 0 1-4 0V4z" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    <Path d="M22 4h-4v4a2 2 0 0 0 4 0V4z" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    <Path d="M12 16v4" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+    <Path d="M8 22h8" stroke={color} strokeWidth="1.8" strokeLinecap="round" />
+  </Svg>
+);
+
+// ── Rekor Vitrini: Altıgen Nod (maxNode) ──────────────────────────────────────
+export const HexNodeIcon = ({ size = 28, color = '#00ffe0' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M12 2l8.66 5v10L12 22l-8.66-5V7z"
+      fill={color} fillOpacity="0.15"
+      stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path d="M12 8v8" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeOpacity="0.6" />
+    <Path d="M8.27 10l7.46 4" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeOpacity="0.6" />
+    <Path d="M15.73 10l-7.46 4" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeOpacity="0.6" />
+  </Svg>
+);
+
 // ── Ev / Ana Menü ikonu ────────────────────────────────────────────────────────
 export const HomeIcon = ({ size = 24, color = '#aa44ff' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
