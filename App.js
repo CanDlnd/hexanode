@@ -2268,6 +2268,103 @@ function GuideModal({ visible, onClose }) {
 }
 
 // ── MainMenu ────────────────────────────────────────────────────────────────────
+// ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
+// ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
+
+// Nodeların boyutları (size) artırıldı.
+const FLOAT_NODES = [
+  { value: 2, color: '#7733cc', x: '12%', y: '10%', size: 75, delay: 0, dur: 7200 },
+  { value: 8, color: '#00ffe0', x: '78%', y: '22%', size: 65, delay: 1400, dur: 8800 },
+  { value: 64, color: '#ffdd00', x: '55%', y: '38%', size: 85, delay: 600, dur: 9600 },
+  { value: 256, color: '#4488ff', x: '28%', y: '55%', size: 70, delay: 2200, dur: 7800 },
+  { value: 1024, color: '#aa44ff', x: '82%', y: '68%', size: 80, delay: 900, dur: 10200 },
+  { value: 16, color: '#00ffe0', x: '6%', y: '80%', size: 55, delay: 3100, dur: 8400 },
+  { value: 512, color: '#ff4488', x: '65%', y: '48%', size: 60, delay: 1800, dur: 9000 },
+];
+
+function FloatingNode({ value, color, x, y, size, delay, dur }) {
+  const translateY = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(opacity, {
+      toValue: 0.45, // 0.18'den 0.45'e çıkarıldı, artık daha belirgin ve parlak
+      duration: 2000,
+      delay,
+      useNativeDriver: true,
+    }).start();
+
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(translateY, {
+          toValue: -16,
+          duration: dur / 2,
+          delay,
+          useNativeDriver: true,
+        }),
+        Animated.timing(translateY, {
+          toValue: 16,
+          duration: dur / 2,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const label = String(value);
+  const fontSize = size * (label.length <= 3 ? 0.28 : 0.22);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y,
+        width: size,
+        height: size,
+        alignItems: 'center',
+        justifyContent: 'center',
+        transform: [{ translateY }],
+        opacity,
+      }}
+    >
+      {/* Arka plan olarak gerçek 6gen ikon kullanılıyor */}
+      <View style={{ position: 'absolute', opacity: 0.8 }}>
+        <HexNodeIcon size={size} color={color} />
+      </View>
+
+      {/* Altıgenin tam ortasına yerleşen metin */}
+      <Text style={{
+        color: '#ffffff', // Metnin daha net okunması için beyaz eklendi
+        fontSize,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+        textShadowColor: color,
+        textShadowOffset: { width: 0, height: 0 },
+        textShadowRadius: 8,
+      }}>
+        {label}
+      </Text>
+    </Animated.View>
+  );
+}
+
+function FloatingBackground() {
+  return (
+    <View
+      pointerEvents="none"
+      style={[StyleSheet.absoluteFillObject, { zIndex: -1, overflow: 'hidden' }]}
+    >
+      {FLOAT_NODES.map((n, i) => (
+        <FloatingNode key={i} {...n} />
+      ))}
+    </View>
+  );
+}
+
 function MainMenu() {
   const hexaCore = useStore((s) => s.hexaCore);
   const highScore = useStore((s) => s.highScore ?? 0);
@@ -2324,6 +2421,7 @@ function MainMenu() {
   return (
     <SafeAreaView style={menuStyles.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+      <FloatingBackground />
 
       {/* ── Üst: Logo + HexaCore ─────────────────────────────────────── */}
       <View style={menuStyles.topSection}>
