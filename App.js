@@ -10,6 +10,7 @@ import {
   SafeAreaView,
   PanResponder,
   Animated,
+  Easing,
   Modal,
 } from 'react-native';
 import Svg, { Polygon, Text as SvgText } from 'react-native-svg';
@@ -147,6 +148,12 @@ const C = {
   modalOverlay: 'rgba(4,2,18,0.90)',
 };
 
+// ── Global Modal UI Theme ────────────────────────────────────────────────────
+const COLOR_NEON_PURPLE = '#9944ff';
+const COLOR_NEON_GOLD = '#ffcc44';
+const COLOR_NEON_CYAN = '#00ffe0';
+const COLOR_MODAL_BG = '#0A001F';
+
 // ── Geometri ──────────────────────────────────────────────────────────────────
 const COLS = 4;
 const ROWS = 4;
@@ -235,9 +242,18 @@ function formatNum(n) {
 // Zincirleme birleşmeden kazanılan skor: her adım = (yeni değer) × (adım sırası / kombo çarpanı)
 function mergeScoreFromSteps(steps) {
   if (!steps?.length) return 0;
+  // Zincirdeki en yüksek waveIdx + 1 = kombo derinliği; maxCombo rekorunu güncelle
+  const chainDepth = Math.max(...steps.map((s) => (s.waveIdx ?? 0) + 1));
+  try {
+    const store = useStore.getState();
+    if (chainDepth > (store.maxCombo ?? 0)) {
+      useStore.setState({ maxCombo: chainDepth });
+    }
+  } catch (_) { /* store henüz hazır değilse sessizce geç */ }
+
   return steps.reduce((total, step) => {
-    const mergedVal = (step.cleared?.[0]?.value ?? 0) * 2; // birleşen iki taşın yeni değeri
-    const combo = step.waveIdx + 1;                    // 1'den başlayan kombo çarpanı
+    const mergedVal = (step.cleared?.[0]?.value ?? 0) * 2;
+    const combo = step.waveIdx + 1;
     return total + mergedVal * combo;
   }, 0);
 }
@@ -452,6 +468,7 @@ const useStore = create(
       // ── Rekor state (kalıcı) ────────────────────────────────────────────────
       highScore: 0,               // ulaşılan en yüksek kredi miktarı
       maxNode: 0,                 // oluşturulan en yüksek taş değeri
+      maxCombo: 0,                // ulaşılan en uzun kombo zinciri
       // ── Navigasyon + Global Ayarlar ─────────────────────────────────────────
       currentScreen: 'MENU',     // 'MENU' | 'GAME' | 'LAB'
       previousScreen: 'MENU',    // 'MENU' | 'GAME' — lab'ın açıldığı ekran (kalıcı değil)
@@ -907,7 +924,7 @@ const useStore = create(
       },
     }),
     {
-      name: 'hexanode-storage-v12',
+      name: 'hexanode-storage-v13',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         cells: s.cells,
@@ -924,6 +941,7 @@ const useStore = create(
         hapticsEnabled: s.hapticsEnabled,
         highScore: s.highScore,
         maxNode: s.maxNode,
+        maxCombo: s.maxCombo,
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) return;
@@ -1334,9 +1352,6 @@ function GameOverModal({ visible, onOpenLab }) {
       backgroundColor: 'rgba(11, 5, 32, 0.4)', // Yarı saydam karanlık iç plan
       alignItems: 'center',
       justifyContent: 'center',
-      shadowOffset: { width: 0, height: 0 },
-      shadowOpacity: 0.6,
-      shadowRadius: 12,
       elevation: 5,
     },
     nodeText: {
@@ -1466,7 +1481,7 @@ function LabModal({ visible, onClose }) {
       <Animated.View style={[styles.modalOverlay, { opacity: fadeAnim }]}>
         <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
           {/* Başlık */}
-          <Text style={styles.labTitle}>L A B O R A T U V A R</Text>
+          <Text style={styles.labTitle}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
             <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
@@ -1519,9 +1534,7 @@ function LabModal({ visible, onClose }) {
             );
           })}
 
-          <TouchableOpacity style={[styles.btn, { marginTop: 18 }]} onPress={onClose} activeOpacity={0.85}>
-            <Text style={styles.btnText}>K A P A T</Text>
-          </TouchableOpacity>
+          <ModalCloseBtn onPress={onClose} />
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -1566,7 +1579,7 @@ function LabScreen() {
       <Animated.View style={[styles.labScreenInner, { opacity: fadeAnim }]}>
         <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
           {/* Başlık */}
-          <Text style={styles.labTitle}>L A B O R A T U V A R</Text>
+          <Text style={styles.labTitle}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
             <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
@@ -1619,9 +1632,7 @@ function LabScreen() {
             );
           })}
 
-          <TouchableOpacity style={[styles.btn, { marginTop: 18 }]} onPress={handleClose} activeOpacity={0.85}>
-            <Text style={styles.btnText}>K A P A T</Text>
-          </TouchableOpacity>
+          <ModalCloseBtn onPress={handleClose} />
         </Animated.View>
       </Animated.View>
     </SafeAreaView>
@@ -2205,6 +2216,34 @@ const GUIDE_ITEMS = [
   },
 ];
 
+// ── Ortak Modal Kapat Butonu ──────────────────────────────────────────────────
+function ModalCloseBtn({ onPress, label = 'K A P A T' }) {
+  return (
+    <TouchableOpacity style={modalCloseBtnStyle.btn} onPress={onPress} activeOpacity={0.8}>
+      <Text style={modalCloseBtnStyle.txt}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+const modalCloseBtnStyle = StyleSheet.create({
+  btn: {
+    alignSelf: 'center',
+    marginTop: Math.round(SCREEN_WIDTH * 0.06),
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.1),
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.03),
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: COLOR_NEON_PURPLE,
+    backgroundColor: 'rgba(153,68,255,0.08)',
+  },
+  txt: {
+    color: '#ffffff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '300',
+    letterSpacing: 5,
+    textAlign: 'center',
+  },
+});
+
 function GuideModal({ visible, onClose }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -2258,10 +2297,7 @@ function GuideModal({ visible, onClose }) {
 
           <View style={guideStyles.titleLine} />
 
-          {/* Kapat Butonu */}
-          <TouchableOpacity style={guideStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Text style={guideStyles.closeBtnText}>KAPAT</Text>
-          </TouchableOpacity>
+          <ModalCloseBtn onPress={onClose} />
 
         </Animated.View>
       </Animated.View>
@@ -2271,46 +2307,61 @@ function GuideModal({ visible, onClose }) {
 
 // ── MainMenu ────────────────────────────────────────────────────────────────────
 // ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
+// amplitude: kaç px yukarı/aşağı süzüleceği
 const FLOAT_NODES = [
-  { value: 2, color: '#9944ee', x: '4%', y: '6%', size: 100, rot: 35, delay: 0, dur: 8200 },
-  { value: 8, color: '#00ffe0', x: '70%', y: '14%', size: 88, rot: -50, delay: 1200, dur: 9600 },
-  { value: 64, color: '#ffdd00', x: '46%', y: '32%', size: 116, rot: 60, delay: 500, dur: 11000 },
-  { value: 256, color: '#4488ff', x: '16%', y: '52%', size: 94, rot: -30, delay: 2000, dur: 8800 },
-  { value: 1024, color: '#cc66ff', x: '74%', y: '62%', size: 108, rot: 42, delay: 800, dur: 11400 },
-  { value: 16, color: '#00ffe0', x: '-4%', y: '76%', size: 80, rot: -65, delay: 2800, dur: 9400 },
-  { value: 512, color: '#ff4488', x: '58%', y: '80%', size: 92, rot: 70, delay: 1600, dur: 10400 },
-  { value: 4, color: '#44ddaa', x: '34%', y: '4%', size: 84, rot: -40, delay: 3400, dur: 9000 },
+  { value: 2, color: '#9944ee', x: '3%', y: '5%', size: 110, rot: 35, delay: 0, dur: 8200 },
+  { value: 8, color: '#00ffe0', x: '68%', y: '12%', size: 96, rot: -52, delay: 1100, dur: 9600 },
+  { value: 64, color: '#ffdd00', x: '44%', y: '30%', size: 128, rot: 62, delay: 500, dur: 11000 },
+  { value: 256, color: '#4488ff', x: '14%', y: '50%', size: 104, rot: -28, delay: 1900, dur: 8800 },
+  { value: 1024, color: '#cc66ff', x: '72%', y: '60%', size: 120, rot: 44, delay: 750, dur: 11400 },
+  { value: 16, color: '#00ffe0', x: '-5%', y: '74%', size: 88, rot: -68, delay: 2600, dur: 9400 },
+  { value: 512, color: '#ff4488', x: '56%', y: '78%', size: 102, rot: 72, delay: 1500, dur: 10400 },
+  { value: 4, color: '#44ddaa', x: '32%', y: '3%', size: 92, rot: -42, delay: 3200, dur: 9000 },
 ];
 
 function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
-  const translateY = useRef(new Animated.Value(0)).current;
+  // Başlangıç değerini -amplitude olarak başlat: loop her iterasyonda
+  // -amp → +amp → -amp şeklinde çalışır, sonsuz düzgün sinüs hareketi
+  const amplitude = Math.round(size * 0.20);
+  const translateY = useRef(new Animated.Value(-amplitude)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Fade-in — bir kez
     Animated.timing(opacity, {
       toValue: 1,
-      duration: 2400,
+      duration: 2000,
       delay,
       useNativeDriver: true,
     }).start();
 
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(translateY, {
-          toValue: -22,
-          duration: dur / 2,
-          delay,
-          useNativeDriver: true,
-        }),
-        Animated.timing(translateY, {
-          toValue: 22,
-          duration: dur / 2,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    anim.start();
-    return () => anim.stop();
+    // Float loop — delay SADECE ilk başlatmada, loop içinde asla tekrar uygulanmaz
+    // Her iki yön de eşit süre ve aynı easing eğrisiyle → sonsuz pürüzsüz salınım
+    let loopRef;
+    const timer = setTimeout(() => {
+      loopRef = Animated.loop(
+        Animated.sequence([
+          Animated.timing(translateY, {
+            toValue: amplitude,
+            duration: dur / 2,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(translateY, {
+            toValue: -amplitude,
+            duration: dur / 2,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loopRef.start();
+    }, delay);
+
+    return () => {
+      clearTimeout(timer);
+      loopRef?.stop();
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cx = size / 2;
@@ -2473,9 +2524,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
             <Text style={advStyles.guideArrow}>›</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={advStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Text style={advStyles.closeBtnTxt}>KAPAT</Text>
-          </TouchableOpacity>
+          <ModalCloseBtn onPress={onClose} />
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -2493,24 +2542,24 @@ const advStyles = StyleSheet.create({
   box: {
     width: '100%',
     maxWidth: 400,
-    backgroundColor: '#0f0b24',
+    backgroundColor: COLOR_MODAL_BG,
     borderWidth: 1.5,
-    borderColor: '#5522aa',
-    borderRadius: 18,
+    borderColor: COLOR_NEON_PURPLE,
+    borderRadius: 20,
     paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
     paddingTop: Math.round(SCREEN_WIDTH * 0.07),
     paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
-    shadowColor: '#7733cc',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 20,
     elevation: 14,
+    shadowColor: COLOR_NEON_PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
   },
   title: {
-    color: '#ffffff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.032),
-    fontWeight: '200',
-    letterSpacing: 6,
+    color: COLOR_NEON_GOLD,
+    fontSize: Math.round(SCREEN_WIDTH * 0.038),
+    fontWeight: '700',
+    letterSpacing: 4,
     textAlign: 'center',
     marginBottom: Math.round(SCREEN_WIDTH * 0.06),
   },
@@ -2575,27 +2624,13 @@ const advStyles = StyleSheet.create({
     fontSize: Math.round(SCREEN_WIDTH * 0.050),
     fontWeight: '100',
   },
-  closeBtn: {
-    alignSelf: 'center',
-    paddingHorizontal: 30,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#2a1a5a',
-    backgroundColor: '#0b0520',
-  },
-  closeBtnTxt: {
-    color: '#554477',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '300',
-    letterSpacing: 4,
-  },
 });
 
 // ── RecordsModal — Kayıtlı Veri (Rekorlar) ────────────────────────────────────
 function RecordsModal({ visible, onClose }) {
   const highScore = useStore((s) => s.highScore ?? 0);
   const maxNode = useStore((s) => s.maxNode ?? 0);
+  const maxCombo = useStore((s) => s.maxCombo ?? 0);
 
   const slideAnim = useRef(new Animated.Value(80)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -2622,33 +2657,37 @@ function RecordsModal({ visible, onClose }) {
           {/* Başlık */}
           <Text style={recStyles.title}>K A Y I T L I   V E R İ</Text>
 
-          {/* Rekor Skor */}
-          <View style={recStyles.statRow}>
-            <View style={recStyles.iconWrap}>
-              <TrophyIcon size={32} color="#ffcc44" />
+          {/* 3'lü kart dizisi */}
+          <View style={recStyles.cardRow}>
+
+            {/* Rekor Skor */}
+            <View style={recStyles.card}>
+              <TrophyIcon size={28} color={COLOR_NEON_GOLD} />
+              <Text style={recStyles.cardLabel}>REKOR{'\n'}SKOR</Text>
+              <Text style={[recStyles.cardVal, { color: COLOR_NEON_GOLD }]}>{formatNum(highScore)}</Text>
             </View>
-            <View style={recStyles.statText}>
-              <Text style={recStyles.statLabel}>REKOR SKOR</Text>
-              <Text style={recStyles.statVal}>{formatNum(highScore)}</Text>
+
+            <View style={recStyles.cardDivider} />
+
+            {/* En Yüksek Nod */}
+            <View style={recStyles.card}>
+              <HexNodeIcon size={28} color={COLOR_NEON_CYAN} />
+              <Text style={recStyles.cardLabel}>EN YÜKSEK{'\n'}NOD</Text>
+              <Text style={[recStyles.cardVal, { color: COLOR_NEON_CYAN }]}>{formatNum(maxNode)}</Text>
             </View>
+
+            <View style={recStyles.cardDivider} />
+
+            {/* En Uzun Kombo */}
+            <View style={recStyles.card}>
+              <OverloadIcon size={28} color="#ff9900" />
+              <Text style={recStyles.cardLabel}>EN UZUN{'\n'}KOMBO</Text>
+              <Text style={[recStyles.cardVal, { color: '#ff9900' }]}>x{maxCombo}</Text>
+            </View>
+
           </View>
 
-          <View style={recStyles.sep} />
-
-          {/* En Yüksek Nod */}
-          <View style={recStyles.statRow}>
-            <View style={recStyles.iconWrap}>
-              <HexNodeIcon size={32} color="#00ffe0" />
-            </View>
-            <View style={recStyles.statText}>
-              <Text style={recStyles.statLabel}>EN YÜKSEK NOD</Text>
-              <Text style={[recStyles.statVal, recStyles.statValCyan]}>{formatNum(maxNode)}</Text>
-            </View>
-          </View>
-
-          <TouchableOpacity style={recStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
-            <Text style={recStyles.closeBtnTxt}>KAPAT</Text>
-          </TouchableOpacity>
+          <ModalCloseBtn onPress={onClose} />
         </Animated.View>
       </Animated.View>
     </Modal>
@@ -2661,84 +2700,64 @@ const recStyles = StyleSheet.create({
     backgroundColor: 'rgba(4, 4, 10, 0.93)',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.05),
   },
   box: {
     width: '100%',
-    maxWidth: 380,
-    backgroundColor: '#0f0b24',
+    maxWidth: 400,
+    backgroundColor: COLOR_MODAL_BG,
+    borderColor: COLOR_NEON_PURPLE,
     borderWidth: 1.5,
-    borderColor: '#aa7700',
-    borderRadius: 18,
-    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
-    paddingTop: Math.round(SCREEN_WIDTH * 0.08),
-    paddingBottom: Math.round(SCREEN_WIDTH * 0.07),
-    shadowColor: '#ffcc44',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 18,
+    borderRadius: 20,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.05),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
     elevation: 12,
+    shadowColor: COLOR_NEON_PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
   },
   title: {
-    color: '#ffcc44',
-    fontSize: Math.round(SCREEN_WIDTH * 0.030),
-    fontWeight: '200',
-    letterSpacing: 5,
-    textAlign: 'center',
-    marginBottom: Math.round(SCREEN_WIDTH * 0.07),
-    textShadowColor: '#ffaa00',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 8,
-  },
-  statRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.035),
-  },
-  iconWrap: {
-    width: 48,
-    alignItems: 'center',
-  },
-  statText: {
-    flex: 1,
-  },
-  statLabel: {
-    color: '#666688',
-    fontSize: Math.round(SCREEN_WIDTH * 0.022),
-    fontWeight: '300',
-    letterSpacing: 2,
-    marginBottom: 4,
-  },
-  statVal: {
-    color: '#ffcc44',
-    fontSize: Math.round(SCREEN_WIDTH * 0.056),
-    fontWeight: '100',
-    letterSpacing: 2,
-  },
-  statValCyan: {
-    color: '#00ffe0',
-  },
-  sep: {
-    height: 1,
-    backgroundColor: '#1a1040',
-    marginVertical: 4,
-  },
-  closeBtn: {
-    alignSelf: 'center',
-    marginTop: Math.round(SCREEN_WIDTH * 0.07),
-    paddingHorizontal: 30,
-    paddingVertical: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#3a2a1a',
-    backgroundColor: '#120800',
-  },
-  closeBtnTxt: {
-    color: '#886633',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '300',
+    color: COLOR_NEON_GOLD,
+    fontSize: Math.round(SCREEN_WIDTH * 0.038),
+    fontWeight: '700',
     letterSpacing: 4,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  // 3'lü kart satırı
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    justifyContent: 'space-between',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.02),
+  },
+  card: {
+    flex: 1,
+    alignItems: 'center',
+    gap: Math.round(SCREEN_WIDTH * 0.018),
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.04),
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.01),
+  },
+  cardDivider: {
+    width: 1,
+    backgroundColor: '#1e0a40',
+    marginVertical: 8,
+  },
+  cardLabel: {
+    color: '#666688',
+    fontSize: Math.round(SCREEN_WIDTH * 0.020),
+    fontWeight: '300',
+    letterSpacing: 1.5,
+    textAlign: 'center',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.028),
+  },
+  cardVal: {
+    fontSize: Math.round(SCREEN_WIDTH * 0.048),
+    fontWeight: '200',
+    letterSpacing: 1,
+    textAlign: 'center',
   },
 });
 
@@ -2947,7 +2966,7 @@ export default function App() {
         <HexGrid onGridMeasure={handleGridMeasure} isDragActive={ghost.active} />
       </View>
 
-      {/* Footer — Sürüklenebilir parça önizlemeleri + Power-up çubuğu */}
+      {/* Footer — Sürüklenebilir parça önizlemeleri */}
       <View style={styles.footer}>
         <Text style={styles.nextLabel}>S O N R A K İ  —  S Ü R Ü K L E</Text>
         <View style={styles.piecesRow}>
@@ -2968,6 +2987,10 @@ export default function App() {
             Yeterli kredi yok — bekle
           </Text>
         )}
+      </View>
+
+      {/* Power-up çubuğu — footer'dan ayrı, navigasyon barının üstünde sabitlenmiş */}
+      <View style={styles.powerBarContainer}>
         <PowerUpBar />
       </View>
 
@@ -3063,11 +3086,17 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   footer: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingBottom: 18,
-    gap: 14,
+    paddingTop: 8,
+    paddingBottom: 6,
+    gap: 10,
+  },
+  powerBarContainer: {
+    alignItems: 'center',
+    // Android navigasyon barının üstüne taşmayı önlemek için yeterli boşluk
+    paddingBottom: Math.round(SCREEN_HEIGHT * 0.032),
+    paddingTop: 4,
   },
   nextPiecesBlock: {
     alignItems: 'center',
@@ -3099,10 +3128,6 @@ const styles = StyleSheet.create({
     borderColor: C.btnBorder,
     backgroundColor: C.btnBg,
     borderRadius: 9,
-    shadowColor: '#7a55cc',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.22,
-    shadowRadius: 10,
     elevation: 5,
   },
   btnText: {
@@ -3137,10 +3162,6 @@ const styles = StyleSheet.create({
     paddingBottom: 36,
     alignItems: 'center',
     width: SCREEN_WIDTH - 60,
-    shadowColor: '#7a50d0',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 24,
     elevation: 10,
   },
   modalTitle: {
@@ -3199,14 +3220,10 @@ const styles = StyleSheet.create({
   goBox: {
     width: '85%',
     maxWidth: 400,
-    backgroundColor: '#0f0b24',
+    backgroundColor: COLOR_MODAL_BG,
     borderWidth: 2,
-    borderRadius: 16,
+    borderRadius: 20,
     overflow: 'hidden',
-    shadowColor: '#aa44ff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.85,
-    elevation: 24,
   },
   goTitleBlock: {
     paddingHorizontal: 22,
@@ -3339,25 +3356,25 @@ const styles = StyleSheet.create({
   },
   // ── Lab Modal ─────────────────────────────────────────────────────────────
   labBox: {
-    backgroundColor: '#090118',
+    backgroundColor: COLOR_MODAL_BG,
     borderWidth: 1.5,
-    borderColor: '#3a1a70',
-    borderRadius: 18,
+    borderColor: COLOR_NEON_PURPLE,
+    borderRadius: 20,
     paddingHorizontal: 24,
     paddingTop: 32,
     paddingBottom: 24,
     width: SCREEN_WIDTH - 40,
-    shadowColor: '#7733cc',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 22,
     elevation: 14,
+    shadowColor: COLOR_NEON_PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
   },
   labTitle: {
-    color: '#aa66ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.04),
-    fontWeight: '200',
-    letterSpacing: 5,
+    color: COLOR_NEON_GOLD,
+    fontSize: Math.round(SCREEN_WIDTH * 0.048),
+    fontWeight: '700',
+    letterSpacing: 4,
     textAlign: 'center',
     marginBottom: 8,
   },
@@ -3474,9 +3491,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
     gap: 10,
-    paddingBottom: Math.round(SCREEN_HEIGHT * 0.025),
   },
   powerBtn: {
     width: Math.round(SCREEN_WIDTH * 0.165),
@@ -3487,17 +3502,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a0838',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#7733cc',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
     elevation: 4,
   },
   powerBtnActive: {
     backgroundColor: '#2a0860',
-    shadowColor: '#cc44ff',
-    shadowOpacity: 0.7,
-    shadowRadius: 12,
     elevation: 8,
   },
   powerIcon: {
@@ -3616,6 +3624,8 @@ const menuStyles = StyleSheet.create({
     backgroundColor: '#1a0535',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: Math.round(SCREEN_HEIGHT * 0.18),
+    marginTop: Math.round(SCREEN_HEIGHT * 0.15),
   },
   playBtnText: {
     color: '#ffffff',
@@ -3661,18 +3671,18 @@ const guideStyles = StyleSheet.create({
     width: '100%',
     maxWidth: 420,
     maxHeight: '88%',
-    backgroundColor: '#0f0b24',
+    backgroundColor: COLOR_MODAL_BG,
     borderWidth: 1.5,
-    borderColor: '#5522aa',
-    borderRadius: 16,
+    borderColor: COLOR_NEON_PURPLE,
+    borderRadius: 20,
     paddingHorizontal: Math.round(SCREEN_WIDTH * 0.055),
     paddingTop: Math.round(SCREEN_WIDTH * 0.050),
     paddingBottom: Math.round(SCREEN_WIDTH * 0.040),
-    shadowColor: '#7733cc',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 18,
     elevation: 12,
+    shadowColor: COLOR_NEON_PURPLE,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
   },
   scrollArea: {
     flexGrow: 0,
@@ -3681,10 +3691,10 @@ const guideStyles = StyleSheet.create({
     paddingBottom: 4,
   },
   title: {
-    color: '#cc66ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.060),
-    fontWeight: '200',
-    letterSpacing: 6,
+    color: COLOR_NEON_GOLD,
+    fontSize: Math.round(SCREEN_WIDTH * 0.052),
+    fontWeight: '700',
+    letterSpacing: 4,
     textAlign: 'center',
     marginBottom: 4,
   },
@@ -3732,24 +3742,5 @@ const guideStyles = StyleSheet.create({
     fontSize: Math.round(SCREEN_WIDTH * 0.028),
     fontWeight: '300',
     lineHeight: Math.round(SCREEN_WIDTH * 0.040),
-  },
-  closeBtn: {
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: '#6622cc',
-    backgroundColor: '#1a0840',
-    shadowColor: '#aa44ff',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  closeBtnText: {
-    color: '#cc88ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.036),
-    fontWeight: '300',
-    letterSpacing: 6,
   },
 });
