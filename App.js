@@ -40,10 +40,11 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // ── Ses Motoru ─────────────────────────────────────────────────────────────────
 const SFX = {
-  spawn: require('./assets/sfx/spawn.wav'),
-  error: require('./assets/sfx/error.wav'),
-  merge: require('./assets/sfx/merge.wav'),
+  spawn:   require('./assets/sfx/spawn.wav'),
+  error:   require('./assets/sfx/error.wav'),
+  merge:   require('./assets/sfx/merge.wav'),
   upgrade: require('./assets/sfx/upgrade.wav'),
+  click:   require('./assets/sfx/click.mp3'),
 };
 
 async function initAudio() {
@@ -2219,7 +2220,11 @@ const GUIDE_ITEMS = [
 // ── Ortak Modal Kapat Butonu ──────────────────────────────────────────────────
 function ModalCloseBtn({ onPress, label = 'K A P A T' }) {
   return (
-    <TouchableOpacity style={modalCloseBtnStyle.btn} onPress={onPress} activeOpacity={0.8}>
+    <TouchableOpacity
+      style={modalCloseBtnStyle.btn}
+      onPress={() => { playSound('click'); onPress?.(); }}
+      activeOpacity={0.8}
+    >
       <Text style={modalCloseBtnStyle.txt}>{label}</Text>
     </TouchableOpacity>
   );
@@ -2795,11 +2800,13 @@ function MainMenu() {
   });
 
   const handlePlay = () => {
+    playSound('click');
     safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
     setScreen('GAME');
   };
 
   const handleLab = () => {
+    playSound('click');
     safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
     setPreviousScreen('MENU');
     setScreen('LAB');
@@ -2832,7 +2839,7 @@ function MainMenu() {
         <View style={menuStyles.controlRow}>
           <TouchableOpacity
             style={menuStyles.controlBtn}
-            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
+            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
             activeOpacity={0.8}
           >
             <TrophyIcon size={28} color="#ffcc44" />
@@ -2846,7 +2853,7 @@ function MainMenu() {
 
           <TouchableOpacity
             style={menuStyles.controlBtn}
-            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setSettingsOpen(true); }}
+            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setSettingsOpen(true); }}
             activeOpacity={0.8}
           >
             <GearIcon size={28} color="#00ffe0" />
@@ -2890,6 +2897,7 @@ export default function App() {
 
   // Menüye dön (onay olmadan; üstte küçük buton)
   const handleGoMenu = useCallback(() => {
+    playSound('click');
     safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
     setScreen('MENU');
   }, [setScreen]);
