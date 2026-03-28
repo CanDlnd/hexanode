@@ -26,6 +26,8 @@ import {
   HomeIcon,
   TrophyIcon,
   HexNodeIcon,
+  ShopIcon,
+  GearIcon,
 } from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -33,7 +35,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // ── Ses Motoru ─────────────────────────────────────────────────────────────────
 const SFX = {
@@ -2269,27 +2271,25 @@ function GuideModal({ visible, onClose }) {
 
 // ── MainMenu ────────────────────────────────────────────────────────────────────
 // ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
-// ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
-
-// Nodeların boyutları (size) artırıldı.
 const FLOAT_NODES = [
-  { value: 2, color: '#7733cc', x: '12%', y: '10%', size: 75, delay: 0, dur: 7200 },
-  { value: 8, color: '#00ffe0', x: '78%', y: '22%', size: 65, delay: 1400, dur: 8800 },
-  { value: 64, color: '#ffdd00', x: '55%', y: '38%', size: 85, delay: 600, dur: 9600 },
-  { value: 256, color: '#4488ff', x: '28%', y: '55%', size: 70, delay: 2200, dur: 7800 },
-  { value: 1024, color: '#aa44ff', x: '82%', y: '68%', size: 80, delay: 900, dur: 10200 },
-  { value: 16, color: '#00ffe0', x: '6%', y: '80%', size: 55, delay: 3100, dur: 8400 },
-  { value: 512, color: '#ff4488', x: '65%', y: '48%', size: 60, delay: 1800, dur: 9000 },
+  { value: 2, color: '#9944ee', x: '4%', y: '6%', size: 100, rot: 35, delay: 0, dur: 8200 },
+  { value: 8, color: '#00ffe0', x: '70%', y: '14%', size: 88, rot: -50, delay: 1200, dur: 9600 },
+  { value: 64, color: '#ffdd00', x: '46%', y: '32%', size: 116, rot: 60, delay: 500, dur: 11000 },
+  { value: 256, color: '#4488ff', x: '16%', y: '52%', size: 94, rot: -30, delay: 2000, dur: 8800 },
+  { value: 1024, color: '#cc66ff', x: '74%', y: '62%', size: 108, rot: 42, delay: 800, dur: 11400 },
+  { value: 16, color: '#00ffe0', x: '-4%', y: '76%', size: 80, rot: -65, delay: 2800, dur: 9400 },
+  { value: 512, color: '#ff4488', x: '58%', y: '80%', size: 92, rot: 70, delay: 1600, dur: 10400 },
+  { value: 4, color: '#44ddaa', x: '34%', y: '4%', size: 84, rot: -40, delay: 3400, dur: 9000 },
 ];
 
-function FloatingNode({ value, color, x, y, size, delay, dur }) {
+function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
   const translateY = useRef(new Animated.Value(0)).current;
   const opacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(opacity, {
-      toValue: 0.45, // 0.18'den 0.45'e çıkarıldı, artık daha belirgin ve parlak
-      duration: 2000,
+      toValue: 1,
+      duration: 2400,
       delay,
       useNativeDriver: true,
     }).start();
@@ -2297,13 +2297,13 @@ function FloatingNode({ value, color, x, y, size, delay, dur }) {
     const anim = Animated.loop(
       Animated.sequence([
         Animated.timing(translateY, {
-          toValue: -16,
+          toValue: -22,
           duration: dur / 2,
           delay,
           useNativeDriver: true,
         }),
         Animated.timing(translateY, {
-          toValue: 16,
+          toValue: 22,
           duration: dur / 2,
           useNativeDriver: true,
         }),
@@ -2313,8 +2313,13 @@ function FloatingNode({ value, color, x, y, size, delay, dur }) {
     return () => anim.stop();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size * 0.45;
+  const pts = hexPoints(cx, cy, r);
+
   const label = String(value);
-  const fontSize = size * (label.length <= 3 ? 0.28 : 0.22);
+  const fs = size * (label.length <= 2 ? 0.20 : label.length === 3 ? 0.16 : 0.13);
 
   return (
     <Animated.View
@@ -2325,29 +2330,41 @@ function FloatingNode({ value, color, x, y, size, delay, dur }) {
         top: y,
         width: size,
         height: size,
-        alignItems: 'center',
-        justifyContent: 'center',
-        transform: [{ translateY }],
+        transform: [{ translateY }, { rotate: `${rot}deg` }],
         opacity,
       }}
     >
-      {/* Arka plan olarak gerçek 6gen ikon kullanılıyor */}
-      <View style={{ position: 'absolute', opacity: 0.8 }}>
-        <HexNodeIcon size={size} color={color} />
-      </View>
-
-      {/* Altıgenin tam ortasına yerleşen metin */}
-      <Text style={{
-        color: '#ffffff', // Metnin daha net okunması için beyaz eklendi
-        fontSize,
-        fontWeight: '700',
-        letterSpacing: 0.5,
-        textShadowColor: color,
-        textShadowOffset: { width: 0, height: 0 },
-        textShadowRadius: 8,
-      }}>
-        {label}
-      </Text>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {/* Dolgu */}
+        <Polygon
+          points={pts}
+          fill={`${color}15`}
+          stroke={`${color}60`}
+          strokeWidth={1.5}
+        />
+        {/* İç ince çizgi — derinlik hissi */}
+        <Polygon
+          points={hexPoints(cx, cy, r * 0.78)}
+          fill="none"
+          stroke={`${color}25`}
+          strokeWidth={1}
+        />
+        {/* Sayı — rot'u counter-rotate edince dik görünür */}
+        <SvgText
+          x={cx}
+          y={cy + fs * 0.38}
+          textAnchor="middle"
+          fill={color}
+          fontSize={fs}
+          fontWeight="bold"
+          opacity={0.80}
+          rotation={-rot}
+          originX={cx}
+          originY={cy}
+        >
+          {label}
+        </SvgText>
+      </Svg>
     </Animated.View>
   );
 }
@@ -2365,6 +2382,366 @@ function FloatingBackground() {
   );
 }
 
+// ── AdvancedSettingsModal ──────────────────────────────────────────────────────
+function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
+  const soundEnabled = useStore((s) => s.soundEnabled);
+  const hapticsEnabled = useStore((s) => s.hapticsEnabled);
+  const toggleSound = useStore((s) => s.toggleSound);
+  const toggleHaptics = useStore((s) => s.toggleHaptics);
+
+  const slideAnim = useRef(new Animated.Value(80)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 18, bounciness: 4, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 80, duration: 200, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  const handleToggleSound = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    toggleSound();
+  };
+  const handleToggleHaptics = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    toggleHaptics();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <Animated.View style={[advStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[advStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+          <Text style={advStyles.title}>A Y A R L A R</Text>
+
+          {/* Ses */}
+          <View style={advStyles.row}>
+            <View style={advStyles.rowLeft}>
+              {soundEnabled
+                ? <SoundOnIcon size={26} color="#aa44ff" />
+                : <SoundOffIcon size={26} color="#444455" />}
+              <Text style={[advStyles.rowLabel, !soundEnabled && advStyles.rowLabelOff]}>
+                {soundEnabled ? 'SES AÇIK' : 'SES KAPALI'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[advStyles.toggleBtn, soundEnabled && advStyles.toggleBtnOn]}
+              onPress={handleToggleSound}
+              activeOpacity={0.75}
+            >
+              <Text style={[advStyles.toggleTxt, soundEnabled && advStyles.toggleTxtOn]}>
+                {soundEnabled ? 'KAPAT' : 'AÇ'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Titreşim */}
+          <View style={advStyles.row}>
+            <View style={advStyles.rowLeft}>
+              {hapticsEnabled
+                ? <VibrationOnIcon size={26} color="#aa44ff" />
+                : <VibrationOffIcon size={26} color="#444455" />}
+              <Text style={[advStyles.rowLabel, !hapticsEnabled && advStyles.rowLabelOff]}>
+                {hapticsEnabled ? 'TİTREŞİM AÇIK' : 'TİTREŞİM KAPALI'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[advStyles.toggleBtn, hapticsEnabled && advStyles.toggleBtnOn]}
+              onPress={handleToggleHaptics}
+              activeOpacity={0.75}
+            >
+              <Text style={[advStyles.toggleTxt, hapticsEnabled && advStyles.toggleTxtOn]}>
+                {hapticsEnabled ? 'KAPAT' : 'AÇ'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Sistem Rehberi */}
+          <TouchableOpacity
+            style={advStyles.guideRow}
+            onPress={() => { onClose(); setTimeout(onOpenGuide, 250); }}
+            activeOpacity={0.8}
+          >
+            <Text style={advStyles.guideTxt}>SİSTEM REHBERİ</Text>
+            <Text style={advStyles.guideArrow}>›</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={advStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={advStyles.closeBtnTxt}>KAPAT</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const advStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 4, 10, 0.93)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#0f0b24',
+    borderWidth: 1.5,
+    borderColor: '#5522aa',
+    borderRadius: 18,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
+    shadowColor: '#7733cc',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 20,
+    elevation: 14,
+  },
+  title: {
+    color: '#ffffff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '200',
+    letterSpacing: 6,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
+  },
+  rowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  rowLabel: {
+    color: '#cc99ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontWeight: '300',
+    letterSpacing: 2,
+  },
+  rowLabelOff: {
+    color: '#444455',
+  },
+  toggleBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2a1a5a',
+    backgroundColor: '#0b0520',
+  },
+  toggleBtnOn: {
+    borderColor: '#7733cc',
+    backgroundColor: '#1a0838',
+  },
+  toggleTxt: {
+    color: '#444455',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '600',
+    letterSpacing: 1.5,
+  },
+  toggleTxtOn: {
+    color: '#aa44ff',
+  },
+  guideRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.035),
+    borderTopWidth: 1,
+    borderTopColor: '#1a1040',
+    marginTop: Math.round(SCREEN_WIDTH * 0.01),
+  },
+  guideTxt: {
+    color: '#7744cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontWeight: '300',
+    letterSpacing: 2,
+  },
+  guideArrow: {
+    color: '#7744cc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.050),
+    fontWeight: '100',
+  },
+  closeBtn: {
+    alignSelf: 'center',
+    paddingHorizontal: 30,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2a1a5a',
+    backgroundColor: '#0b0520',
+  },
+  closeBtnTxt: {
+    color: '#554477',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+    letterSpacing: 4,
+  },
+});
+
+// ── RecordsModal — Kayıtlı Veri (Rekorlar) ────────────────────────────────────
+function RecordsModal({ visible, onClose }) {
+  const highScore = useStore((s) => s.highScore ?? 0);
+  const maxNode = useStore((s) => s.maxNode ?? 0);
+
+  const slideAnim = useRef(new Animated.Value(80)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 18, bounciness: 4, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 80, duration: 200, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <Animated.View style={[recStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[recStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+
+          {/* Başlık */}
+          <Text style={recStyles.title}>K A Y I T L I   V E R İ</Text>
+
+          {/* Rekor Skor */}
+          <View style={recStyles.statRow}>
+            <View style={recStyles.iconWrap}>
+              <TrophyIcon size={32} color="#ffcc44" />
+            </View>
+            <View style={recStyles.statText}>
+              <Text style={recStyles.statLabel}>REKOR SKOR</Text>
+              <Text style={recStyles.statVal}>{formatNum(highScore)}</Text>
+            </View>
+          </View>
+
+          <View style={recStyles.sep} />
+
+          {/* En Yüksek Nod */}
+          <View style={recStyles.statRow}>
+            <View style={recStyles.iconWrap}>
+              <HexNodeIcon size={32} color="#00ffe0" />
+            </View>
+            <View style={recStyles.statText}>
+              <Text style={recStyles.statLabel}>EN YÜKSEK NOD</Text>
+              <Text style={[recStyles.statVal, recStyles.statValCyan]}>{formatNum(maxNode)}</Text>
+            </View>
+          </View>
+
+          <TouchableOpacity style={recStyles.closeBtn} onPress={onClose} activeOpacity={0.8}>
+            <Text style={recStyles.closeBtnTxt}>KAPAT</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const recStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 4, 10, 0.93)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#0f0b24',
+    borderWidth: 1.5,
+    borderColor: '#aa7700',
+    borderRadius: 18,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.08),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.07),
+    shadowColor: '#ffcc44',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+  title: {
+    color: '#ffcc44',
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontWeight: '200',
+    letterSpacing: 5,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.07),
+    textShadowColor: '#ffaa00',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
+  statRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.035),
+  },
+  iconWrap: {
+    width: 48,
+    alignItems: 'center',
+  },
+  statText: {
+    flex: 1,
+  },
+  statLabel: {
+    color: '#666688',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '300',
+    letterSpacing: 2,
+    marginBottom: 4,
+  },
+  statVal: {
+    color: '#ffcc44',
+    fontSize: Math.round(SCREEN_WIDTH * 0.056),
+    fontWeight: '100',
+    letterSpacing: 2,
+  },
+  statValCyan: {
+    color: '#00ffe0',
+  },
+  sep: {
+    height: 1,
+    backgroundColor: '#1a1040',
+    marginVertical: 4,
+  },
+  closeBtn: {
+    alignSelf: 'center',
+    marginTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingHorizontal: 30,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a2a1a',
+    backgroundColor: '#120800',
+  },
+  closeBtnTxt: {
+    color: '#886633',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontWeight: '300',
+    letterSpacing: 4,
+  },
+});
+
 function MainMenu() {
   const hexaCore = useStore((s) => s.hexaCore);
   const highScore = useStore((s) => s.highScore ?? 0);
@@ -2377,6 +2754,8 @@ function MainMenu() {
   const toggleHaptics = useStore((s) => s.toggleHaptics);
 
   const [guideOpen, setGuideOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [recordsOpen, setRecordsOpen] = useState(false);
 
   // Başlık için animasyonlu parlama
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -2407,17 +2786,6 @@ function MainMenu() {
     setScreen('LAB');
   };
 
-  const handleToggleSound = () => {
-    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
-    toggleSound();
-  };
-
-  const handleToggleHaptics = () => {
-    // Haptik kapat/aç için — kapatmadan önce son bir titreşim ver
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    toggleHaptics();
-  };
-
   return (
     <SafeAreaView style={menuStyles.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
@@ -2425,93 +2793,56 @@ function MainMenu() {
 
       {/* ── Üst: Logo + HexaCore ─────────────────────────────────────── */}
       <View style={menuStyles.topSection}>
-        <View style={menuStyles.logoWrap}>
-          {/* Arka plan dekor çizgisi */}
-          <View style={menuStyles.logoDividerTop} />
-          <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
-            HEXANODE
-          </Animated.Text>
-          <View style={menuStyles.logoDividerBot} />
-        </View>
-
+        <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
+          HEXA NODE
+        </Animated.Text>
         <View style={menuStyles.hcRow}>
-          <HexaCoreIcon size={20} color="#aa44ff" />
+          <HexaCoreIcon size={18} color="#aa44ff" />
           <Text style={menuStyles.hcVal}>{hexaCore}</Text>
           <Text style={menuStyles.hcLabel}> HexaCore</Text>
         </View>
       </View>
 
-      {/* ── Kayıtlı Veri: Rekor Vitrini ─────────────────────────────── */}
-      <View style={menuStyles.recordBox}>
-        <Text style={menuStyles.recordBoxTitle}>K A Y I T L I   V E R İ</Text>
-        <View style={menuStyles.recordRow}>
-          <View style={menuStyles.recordItem}>
-            <TrophyIcon size={24} color="#ffcc44" />
-            <Text style={menuStyles.recordLabel}>REKOR SKOR</Text>
-            <Text style={menuStyles.recordVal}>{formatNum(highScore)}</Text>
-          </View>
-          <View style={menuStyles.recordDivider} />
-          <View style={menuStyles.recordItem}>
-            <HexNodeIcon size={24} color="#00ffe0" />
-            <Text style={menuStyles.recordLabel}>EN YÜKSEK NOD</Text>
-            <Text style={[menuStyles.recordVal, menuStyles.recordValCyan]}>{formatNum(maxNode)}</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* ── Orta: Ana Butonlar ───────────────────────────────────────── */}
-      <View style={menuStyles.midSection}>
+      {/* ── Orta: OYUNA BAŞLA (ekranın tam ortası) ───────────────────── */}
+      <View style={menuStyles.centerSection}>
         <TouchableOpacity style={menuStyles.playBtn} onPress={handlePlay} activeOpacity={0.82}>
-          <View style={menuStyles.playBtnInner}>
-            <Text style={menuStyles.playBtnText}>OYUNA BAŞLA</Text>
-          </View>
+          <Text style={menuStyles.playBtnText}>OYUNA BAŞLA</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={menuStyles.labBtn} onPress={handleLab} activeOpacity={0.82}>
-          <Text style={menuStyles.labBtnText}>MAĞAZA</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ── Alt: Ayarlar (İkon butonları) ───────────────────────────── */}
-      <View style={menuStyles.bottomSection}>
-        <Text style={menuStyles.settingsLabel}>A Y A R L A R</Text>
-        <View style={menuStyles.settingsIconRow}>
-
-          {/* Ses Toggleu */}
+        {/* Alt kontrol paneli: Rekorlar + Mağaza + Ayarlar */}
+        <View style={menuStyles.controlRow}>
           <TouchableOpacity
-            style={[menuStyles.settingIconBtn, soundEnabled && menuStyles.settingIconBtnOn]}
-            onPress={handleToggleSound}
-            activeOpacity={0.75}
+            style={menuStyles.controlBtn}
+            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
+            activeOpacity={0.8}
           >
-            {soundEnabled
-              ? <SoundOnIcon size={28} color="#aa44ff" />
-              : <SoundOffIcon size={28} color="#444455" />}
+            <TrophyIcon size={28} color="#ffcc44" />
+            <Text style={[menuStyles.controlBtnLabel, { color: '#ffcc44' }]}>REKORLAR</Text>
           </TouchableOpacity>
 
-          {/* Titreşim Toggleu */}
-          <TouchableOpacity
-            style={[menuStyles.settingIconBtn, hapticsEnabled && menuStyles.settingIconBtnOn]}
-            onPress={handleToggleHaptics}
-            activeOpacity={0.75}
-          >
-            {hapticsEnabled
-              ? <VibrationOnIcon size={28} color="#aa44ff" />
-              : <VibrationOffIcon size={28} color="#444455" />}
+          <TouchableOpacity style={menuStyles.controlBtn} onPress={handleLab} activeOpacity={0.8}>
+            <ShopIcon size={28} color="#aa44ff" />
+            <Text style={menuStyles.controlBtnLabel}>MAĞAZA</Text>
           </TouchableOpacity>
 
-          {/* Sistem Rehberi */}
           <TouchableOpacity
-            style={[menuStyles.settingIconBtn, menuStyles.settingIconBtnGuide]}
-            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setGuideOpen(true); }}
-            activeOpacity={0.75}
+            style={menuStyles.controlBtn}
+            onPress={() => { safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setSettingsOpen(true); }}
+            activeOpacity={0.8}
           >
-            <Text style={menuStyles.guideBtnText}>?</Text>
+            <GearIcon size={28} color="#00ffe0" />
+            <Text style={[menuStyles.controlBtnLabel, { color: '#00ffe0' }]}>AYARLAR</Text>
           </TouchableOpacity>
-
         </View>
       </View>
 
-      {/* Sistem Rehberi Modal */}
+      {/* Modaller */}
+      <RecordsModal visible={recordsOpen} onClose={() => setRecordsOpen(false)} />
+      <AdvancedSettingsModal
+        visible={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onOpenGuide={() => setGuideOpen(true)}
+      />
       <GuideModal visible={guideOpen} onClose={() => setGuideOpen(false)} />
     </SafeAreaView>
   );
@@ -3145,6 +3476,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
     gap: 10,
+    paddingBottom: Math.round(SCREEN_HEIGHT * 0.025),
   },
   powerBtn: {
     width: Math.round(SCREEN_WIDTH * 0.165),
@@ -3221,47 +3553,29 @@ const menuStyles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: C.bg,
-    justifyContent: 'space-between',
     paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.06),
+    paddingBottom: Math.round(SCREEN_HEIGHT * 0.05), // navigasyon barından kurtar
   },
-  // ── Üst: Logo ────────────────────────────────────────────────────────────
+  // ── Üst: Logo + HexaCore ─────────────────────────────────────────────────
   topSection: {
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: Math.round(SCREEN_WIDTH * 0.10),
-    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
-  },
-  logoWrap: {
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  logoDividerTop: {
-    width: Math.round(SCREEN_WIDTH * 0.55),
-    height: 1,
-    backgroundColor: '#3a1a6a',
-    marginBottom: 16,
+    paddingTop: Math.round(SCREEN_HEIGHT * 0.08),
+    marginBottom: Math.round(SCREEN_HEIGHT * 0.02),
   },
   logoText: {
-    fontSize: Math.round(SCREEN_WIDTH * 0.145),
+    fontSize: Math.round(SCREEN_WIDTH * 0.155),
     fontWeight: '100',
     letterSpacing: Math.round(SCREEN_WIDTH * 0.018),
     textShadowColor: '#aa44ff',
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-  },
-  logoSub: {
-    color: '#4a2a7a',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '300',
-    letterSpacing: 5,
-    marginTop: 6,
-  },
-  logoDividerBot: {
-    width: Math.round(SCREEN_WIDTH * 0.55),
-    height: 1,
-    backgroundColor: '#3a1a6a',
-    marginTop: 16,
+    textShadowRadius: 20,
+    marginBottom: Math.round(SCREEN_HEIGHT * 0.02),
+    fontSize: 75,
+    fontFamily: 'Roboto',
+    fontStyle: 'normal',
+    fontWeight: '400',
+    lineHeight: 100,
+    textAlign: 'center',
   },
   hcRow: {
     flexDirection: 'row',
@@ -3276,36 +3590,32 @@ const menuStyles = StyleSheet.create({
   },
   hcVal: {
     color: '#dd88ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.042),
+    fontSize: Math.round(SCREEN_WIDTH * 0.038),
     fontWeight: '300',
     letterSpacing: 1,
   },
   hcLabel: {
     color: '#6644aa',
-    fontSize: Math.round(SCREEN_WIDTH * 0.030),
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
     fontWeight: '200',
     letterSpacing: 2,
   },
-  // ── Orta: Butonlar ───────────────────────────────────────────────────────
-  midSection: {
+  // ── Orta: OYUNA BAŞLA + Kontrol Paneli ───────────────────────────────────
+  centerSection: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 14,
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.06),
+    gap: Math.round(SCREEN_HEIGHT * 0.03),
   },
   playBtn: {
     width: '90%',
-    height: 70, // Yükseklik kesin olarak sabitlendi
-    borderRadius: 14,
+    height: Math.round(SCREEN_HEIGHT * 0.080),
+    borderRadius: 16,
     borderWidth: 1.5,
     borderColor: '#9944ff',
     backgroundColor: '#1a0535',
-    overflow: 'hidden',
-    justifyContent: 'center', // İçeriği dikeyde tam ortala
-    marginBottom: Math.round(SCREEN_WIDTH * 0.03), // Alt kısımla hafif boşluk
-  },
-  playBtnInner: {
     alignItems: 'center',
-    // DİKKAT: paddingVertical buradan tamamen silindi çünkü height verdik!
+    justifyContent: 'center',
   },
   playBtnText: {
     color: '#ffffff',
@@ -3313,131 +3623,28 @@ const menuStyles = StyleSheet.create({
     fontWeight: '300',
     letterSpacing: 7,
   },
-  labBtn: {
-    width: '90%',
-    height: 70, // OYUNA BAŞLA butonu ile milimetrik aynı yükseklik!
+  // ── Alt Kontrol Paneli: Shop + Gear ──────────────────────────────────────
+  controlRow: {
+    flexDirection: 'row',
+    gap: Math.round(SCREEN_WIDTH * 0.03),
+    width: '100%',
+  },
+  controlBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Math.round(SCREEN_HEIGHT * 0.018),
     borderRadius: 14,
-    borderWidth: 1.5, // Çerçeve kalınlığı eşitlendi
-    borderColor: '#3a1a6a',
-    backgroundColor: '#0f0625',
-    alignItems: 'center',
-    justifyContent: 'center', // İçeriği dikeyde tam ortala
-    // DİKKAT: paddingVertical buradan tamamen silindi!
-  },
-  labBtnText: {
-    color: '#ffffff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.040),
-    fontWeight: '300',
-    letterSpacing: 6,
-  },
-  // ── Alt: Ayarlar ─────────────────────────────────────────────────────────
-  bottomSection: {
-    alignItems: 'center',
-    paddingBottom: Math.round(SCREEN_WIDTH * 0.02),
-    marginLeft: Math.round(SCREEN_WIDTH * 0.05),
-    marginRight: Math.round(SCREEN_WIDTH * 0.05),
-  },
-  settingsLabel: {
-    color: '#3a1a6a',
-    fontSize: Math.round(SCREEN_WIDTH * 0.022),
-    fontWeight: '300',
-    letterSpacing: 6,
-    marginBottom: 14,
-  },
-  // ── Eski toggleRow/toggleBtn (artık kullanılmıyor, temiz bırakıyoruz) ───────
-  toggleLabelOn: { color: '#8844cc' },
-  toggleLabelOff: { color: '#333355' },
-  // ── Rekor Vitrini ───────────────────────────────────────────────────────────
-  recordBox: {
-    marginHorizontal: Math.round(SCREEN_WIDTH * 0.01),
-    marginBottom: Math.round(SCREEN_WIDTH * 0.02),
     borderWidth: 1,
     borderColor: '#2a1a5a',
-    borderRadius: 12,
     backgroundColor: '#0b0520',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    gap: 5,
   },
-  recordBoxTitle: {
-    color: '#ffffff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.019),
-    fontWeight: '300',
-    letterSpacing: 4,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  recordRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-around',
-  },
-  recordItem: {
-    alignItems: 'center',
-    flex: 1,
-    gap: 4,
-  },
-  recordLabel: {
-    color: '#ffffff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.019),
-    fontWeight: '300',
-    letterSpacing: 2,
-  },
-  recordVal: {
-    color: '#ffcc44',
-    fontSize: Math.round(SCREEN_WIDTH * 0.044),
-    fontWeight: '200',
-    letterSpacing: 2,
-    textShadowColor: '#ffaa00',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 8,
-  },
-  recordValCyan: {
-    color: '#00ffe0',
-    textShadowColor: '#00ccaa',
-  },
-  recordDivider: {
-    width: 1,
-    height: 44,
-    backgroundColor: '#2a1a5a',
-  },
-  // ── Ayar İkon Butonları (kompakt, 60×60) ────────────────────────────────────
-  settingsIconRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 20,
-  },
-  settingIconBtn: {
-    width: 60,
-    height: 60,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: '#222233',
-    backgroundColor: '#0b0520',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  settingIconBtnOn: {
-    borderColor: '#4a1a8a',
-    backgroundColor: '#120835',
-    shadowColor: '#7733cc',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  settingIconBtnGuide: {
-    borderColor: '#3a2266',
-    backgroundColor: '#0d0428',
-  },
-  guideBtnText: {
+  controlBtnLabel: {
     color: '#aa44ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.060),
-    fontWeight: '100',
-    lineHeight: Math.round(SCREEN_WIDTH * 0.066),
-    textShadowColor: '#aa44ff',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 10,
+    fontSize: Math.round(SCREEN_WIDTH * 0.018),
+    fontWeight: '300',
+    letterSpacing: 1.5,
   },
 });
 
