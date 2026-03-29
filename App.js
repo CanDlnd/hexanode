@@ -58,11 +58,13 @@ async function initAudio() {
 }
 
 async function playSound(type) {
-  if (useStore?.getState()?.soundEnabled === false) return;
+  const state = useStore?.getState();
+  if (state?.soundEnabled === false) return;
   const source = SFX[type];
   if (!source) return;
+  const vol = typeof state?.soundVolume === 'number' ? state.soundVolume : 0.5;
   try {
-    const { sound } = await Audio.Sound.createAsync(source, { volume: 0.75 });
+    const { sound } = await Audio.Sound.createAsync(source, { volume: vol });
     await sound.playAsync();
     sound.setOnPlaybackStatusUpdate((status) => {
       if (status.didJustFinish) sound.unloadAsync();
@@ -72,12 +74,14 @@ async function playSound(type) {
 
 // Yer değiştirme (swap) için hafif swoosh sesi
 async function playSwapSound() {
-  if (useStore?.getState()?.soundEnabled === false) return;
+  const state = useStore?.getState();
+  if (state?.soundEnabled === false) return;
   const source = SFX.spawn;
   if (!source) return;
+  const vol = typeof state?.soundVolume === 'number' ? state.soundVolume * 0.65 : 0.33;
   try {
     const { sound } = await Audio.Sound.createAsync(source, {
-      volume: 0.5,
+      volume: Math.max(0.05, vol),
       rate: 0.68,
       shouldCorrectPitch: false,
     });
@@ -90,12 +94,14 @@ async function playSwapSound() {
 
 // Kombo zinciri için yükselen pitch/hız ile merge sesi
 async function playMergeWithRate(rate = 1.0) {
-  if (useStore?.getState()?.soundEnabled === false) return;
+  const state = useStore?.getState();
+  if (state?.soundEnabled === false) return;
   const source = SFX.merge;
   if (!source) return;
+  const baseVol = typeof state?.soundVolume === 'number' ? state.soundVolume : 0.5;
   try {
     const { sound } = await Audio.Sound.createAsync(source, {
-      volume: Math.min(0.75 + (rate - 1.0) * 0.4, 1.0),
+      volume: Math.min(baseVol * (1 + (rate - 1.0) * 0.4), 1.0),
       rate,
       shouldCorrectPitch: false,
     });
@@ -289,22 +295,22 @@ function nodeStrokeColor(value) {
 
 // ── Prestij sabitleri ─────────────────────────────────────────────────────────
 const PRESTIGE_UPGRADES = {
-  dataFlow: {
-    name: 'Veri Akışı',
-    desc: 'Pasif geliri kalıcı olarak +%10 artırır (yığılır)',
-    costs: [5, 15, 35, 75, 150],
+  coreMiner: {
+    name: 'HexaCore Madencisi',
+    desc: 'Oyun sonu kazanılan HexaCore miktarını kalıcı +%10 artırır (yığılır)',
+    costs: [50, 150, 300, 600, 1000],
     maxLevel: 5,
   },
-  richStart: {
-    name: 'Zengin Başlangıç',
-    desc: 'Her yeni oyuna +500 ekstra kredi ile başla',
-    costs: [10, 30, 70],
+  skillDiscount: {
+    name: 'Siber İndirim',
+    desc: 'Joker yeteneklerin HexaCore bedelini %10 düşürür',
+    costs: [100, 250, 600],
     maxLevel: 3,
   },
   advancedNode: {
     name: 'Gelişmiş Düğüm',
-    desc: 'Dock\'taki başlangıç taşlarının seviyesi artar',
-    costs: [10, 20, 50],
+    desc: 'Dock\'a yüksek seviyeli taş (4, 8) gelme şansını artırır',
+    costs: [100, 300, 800],
     maxLevel: 3,
   },
 };
@@ -328,10 +334,13 @@ function pickNextValue() {
 }
 
 // Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
-function scoreToHexaCore(cells) {
+// coreMinerLevel her seviyede %10 bonus çarpanı ekler (yığılır)
+function scoreToHexaCore(cells, coreMinerLevel = 0) {
   if (!Array.isArray(cells)) return 1;
   const total = cells.reduce((s, c) => (c && typeof c.value === 'number' && isFinite(c.value) ? s + c.value : s), 0);
-  return Math.max(1, Math.floor(total / 100));
+  const base = Math.max(1, Math.floor(total / 100));
+  const multiplier = 1 + (coreMinerLevel || 0) * 0.10;
+  return Math.floor(base * multiplier);
 }
 
 // Game Over: Sıfır Tolerans — tahta %100 dolu ise anında oyun biter
@@ -414,6 +423,12 @@ function runChainMerge(cells, startIdx) {
 // Sabit HexaCore maliyetleri — krediden bağımsız
 const UNDO_COSTS = [1, 3, 10, 25]; // Zamanı Geri Sar katlanarak artar
 const POWER_HC_COST = { blackhole: 5, wormhole: 3, overload: 10 };
+
+// skillDiscount seviyesine göre HexaCore maliyetini indir (her seviye %10, en az 1)
+function applySkillDiscount(baseHC, skillDiscountLevel) {
+  const lvl = skillDiscountLevel || 0;
+  return Math.max(1, Math.ceil(baseHC * (1 - lvl * 0.10)));
+}
 const POWER_DEFS = [
   { id: 'blackhole', Icon: BlackHoleIcon, short: 'KARA DELİK', hcCost: 5, defaultColor: '#aa44ff' },
   { id: 'wormhole', Icon: WormholeIcon, short: 'SOLUCAN DELİĞİ', hcCost: 3, defaultColor: '#00ffe0' },
@@ -463,7 +478,7 @@ const useStore = create(
       lastOverloadEvent: null,    // { cellIdx, exploded, id }
       // ── Prestij state ───────────────────────────────────────────────────────
       hexaCore: 0,               // kalıcı prestij para birimi (başlangıç hediyesi)
-      prestigeUpgrades: { dataFlow: 0, richStart: 0, advancedNode: 0 },
+      prestigeUpgrades: { coreMiner: 0, skillDiscount: 0, advancedNode: 0 },
       // ── Rekor state (kalıcı) ────────────────────────────────────────────────
       highScore: 0,               // ulaşılan en yüksek kredi miktarı
       maxNode: 0,                 // oluşturulan en yüksek taş değeri
@@ -472,12 +487,14 @@ const useStore = create(
       currentScreen: 'MENU',     // 'MENU' | 'GAME' | 'LAB'
       previousScreen: 'MENU',    // 'MENU' | 'GAME' — lab'ın açıldığı ekran (kalıcı değil)
       soundEnabled: true,
+      soundVolume: 0.5,           // 0.0–1.0 aralığında ses seviyesi
       hapticsEnabled: true,
       labOpen: false,             // prestij marketi modalı (legacy, artık setScreen('LAB') kullanılır)
 
       setScreen: (screen) => set({ currentScreen: screen }),
       setPreviousScreen: (screen) => set({ previousScreen: screen }),
       toggleSound: () => set((s) => ({ soundEnabled: !s.soundEnabled })),
+      setSoundVolume: (vol) => set({ soundVolume: Math.max(0, Math.min(1, vol)) }),
       toggleHaptics: () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
       setLabOpen: (v) => set({ labOpen: v }),
 
@@ -721,7 +738,7 @@ const useStore = create(
       applyBlackHole: (cellIdx) => {
         const s = get();
         if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
-        const cost = POWER_HC_COST.blackhole;
+        const cost = applySkillDiscount(POWER_HC_COST.blackhole, s.prestigeUpgrades?.skillDiscount);
         if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const newCells = [...s.cells];
@@ -752,7 +769,7 @@ const useStore = create(
         }
         const first = s.wormholeFirstIdx;
         if (s.lockedCells[first]) return { ok: false };
-        const cost = POWER_HC_COST.wormhole;
+        const cost = applySkillDiscount(POWER_HC_COST.wormhole, s.prestigeUpgrades?.skillDiscount);
         if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const swapped = [...s.cells];
@@ -794,7 +811,7 @@ const useStore = create(
       applyOverload: (cellIdx) => {
         const s = get();
         if (!s.cells[cellIdx] || s.lockedCells[cellIdx]) return { ok: false };
-        const cost = POWER_HC_COST.overload;
+        const cost = applySkillDiscount(POWER_HC_COST.overload, s.prestigeUpgrades?.skillDiscount);
         if (s.hexaCore < cost) return { ok: false, noHC: true };
         const snap = makeSnap(s);
         const id = Date.now() + Math.random();
@@ -846,7 +863,7 @@ const useStore = create(
         const s = get();
         if (!s.previousState) return { ok: false };
         const costIdx = Math.min(s.undoCostIdx, UNDO_COSTS.length - 1);
-        const cost = UNDO_COSTS[costIdx];
+        const cost = applySkillDiscount(UNDO_COSTS[costIdx], s.prestigeUpgrades?.skillDiscount);
         if (s.hexaCore < cost) return { ok: false, noHC: true };
         set({
           ...s.previousState,
@@ -866,8 +883,8 @@ const useStore = create(
       collectPrestigeAndReset: () => {
         const { cells: rawCells, prestigeUpgrades } = get();
         const cells = Array.isArray(rawCells) ? rawCells : [];
-        const earned = scoreToHexaCore(cells);
-        const richStart = prestigeUpgrades?.richStart ?? 0;
+        const coreMinerLevel = prestigeUpgrades?.coreMiner ?? 0;
+        const earned = scoreToHexaCore(cells, coreMinerLevel);
         const startCredits = 0;
         const finalMaxNode = cells.reduce((mx, c) => {
           const v = c?.value;
@@ -909,11 +926,9 @@ const useStore = create(
       },
 
       resetGame: () => {
-        const { prestigeUpgrades } = get();
-        const richStart = prestigeUpgrades?.richStart ?? 0;
         set({
           cells: Array(ROWS * COLS).fill(null),
-          credits: 500 * richStart,
+          credits: 0,
           uretMaliyeti: 10,
           nextPieces: [pickNextValue(), pickNextValue()],
           selectedPieceIdx: 0,
@@ -934,6 +949,7 @@ const useStore = create(
         hexaCore: s.hexaCore,
         prestigeUpgrades: s.prestigeUpgrades,
         soundEnabled: s.soundEnabled,
+        soundVolume: s.soundVolume,
         hapticsEnabled: s.hapticsEnabled,
         highScore: s.highScore,
         maxNode: s.maxNode,
@@ -1287,9 +1303,10 @@ function GameOverModal({ visible, onOpenLab }) {
   const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
   const setScreen = useStore((s) => s.setScreen);
   const rawCells = useStore((s) => s.cells);
+  const coreMinerLevel = useStore((s) => s.prestigeUpgrades?.coreMiner ?? 0);
   const cells = Array.isArray(rawCells) ? rawCells : [];
   const best = cells.reduce((max, c) => (c && typeof c.value === 'number' && isFinite(c.value) && c.value > max ? c.value : max), 0);
-  const earned = scoreToHexaCore(cells);
+  const earned = scoreToHexaCore(cells, coreMinerLevel);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.82)).current;
@@ -1331,10 +1348,10 @@ function GameOverModal({ visible, onOpenLab }) {
   });
 
   const FLOATING_NODES = [
-    { id: 1, val: '2',    size: 45, left: SCREEN_WIDTH * 0.10, top: SCREEN_HEIGHT * 0.15, color: '#aa44ff', duration: 3000 },
-    { id: 2, val: '8',    size: 55, left: SCREEN_WIDTH * 0.75, top: SCREEN_HEIGHT * 0.25, color: '#00ffe0', duration: 3500 },
-    { id: 3, val: '64',   size: 35, left: SCREEN_WIDTH * 0.80, top: SCREEN_HEIGHT * 0.65, color: '#ffcc44', duration: 2800 },
-    { id: 4, val: '256',  size: 65, left: SCREEN_WIDTH * 0.12, top: SCREEN_HEIGHT * 0.70, color: '#ff44aa', duration: 4000 },
+    { id: 1, val: '2', size: 45, left: SCREEN_WIDTH * 0.10, top: SCREEN_HEIGHT * 0.15, color: '#aa44ff', duration: 3000 },
+    { id: 2, val: '8', size: 55, left: SCREEN_WIDTH * 0.75, top: SCREEN_HEIGHT * 0.25, color: '#00ffe0', duration: 3500 },
+    { id: 3, val: '64', size: 35, left: SCREEN_WIDTH * 0.80, top: SCREEN_HEIGHT * 0.65, color: '#ffcc44', duration: 2800 },
+    { id: 4, val: '256', size: 65, left: SCREEN_WIDTH * 0.12, top: SCREEN_HEIGHT * 0.70, color: '#ff44aa', duration: 4000 },
     { id: 5, val: '1024', size: 50, left: SCREEN_WIDTH * 0.50, top: SCREEN_HEIGHT * 0.45, color: '#44aaff', duration: 3200 },
   ];
 
@@ -1435,7 +1452,6 @@ function GameOverModal({ visible, onOpenLab }) {
         ]}>
           {/* Başlık şeridi */}
           <View style={styles.goTitleBlock}>
-            <Text style={styles.goTitleSub}>// AĞAZ SİSTEM RAPORU</Text>
             <Text style={styles.goTitle}>SİSTEM KİLİTLENDİ</Text>
           </View>
 
@@ -1529,8 +1545,8 @@ function LabModal({ visible, onClose }) {
   if (!visible) return null;
 
   const UPGRADE_ROWS = [
-    { id: 'dataFlow', ...PRESTIGE_UPGRADES.dataFlow },
-    { id: 'richStart', ...PRESTIGE_UPGRADES.richStart },
+    { id: 'coreMiner', ...PRESTIGE_UPGRADES.coreMiner },
+    { id: 'skillDiscount', ...PRESTIGE_UPGRADES.skillDiscount },
     { id: 'advancedNode', ...PRESTIGE_UPGRADES.advancedNode },
   ];
 
@@ -1621,8 +1637,8 @@ function LabScreen() {
   const containerBg = fromMenu ? '#04040a' : C.modalOverlay;
 
   const UPGRADE_ROWS = [
-    { id: 'dataFlow', ...PRESTIGE_UPGRADES.dataFlow },
-    { id: 'richStart', ...PRESTIGE_UPGRADES.richStart },
+    { id: 'coreMiner', ...PRESTIGE_UPGRADES.coreMiner },
+    { id: 'skillDiscount', ...PRESTIGE_UPGRADES.skillDiscount },
     { id: 'advancedNode', ...PRESTIGE_UPGRADES.advancedNode },
   ];
 
@@ -2116,12 +2132,13 @@ function PowerUpBar() {
   const hexaCore = useStore((s) => s.hexaCore);
   const undoCostIdx = useStore((s) => s.undoCostIdx);
   const previousState = useStore((s) => s.previousState);
+  const skillDiscountLevel = useStore((s) => s.prestigeUpgrades?.skillDiscount ?? 0);
 
   const hcCosts = {
-    blackhole: POWER_HC_COST.blackhole,
-    wormhole: POWER_HC_COST.wormhole,
-    overload: POWER_HC_COST.overload,
-    rewind: UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)],
+    blackhole: applySkillDiscount(POWER_HC_COST.blackhole, skillDiscountLevel),
+    wormhole: applySkillDiscount(POWER_HC_COST.wormhole, skillDiscountLevel),
+    overload: applySkillDiscount(POWER_HC_COST.overload, skillDiscountLevel),
+    rewind: applySkillDiscount(UNDO_COSTS[Math.min(undoCostIdx, UNDO_COSTS.length - 1)], skillDiscountLevel),
   };
 
   const handlePress = useCallback((id) => {
@@ -2496,11 +2513,21 @@ function FloatingBackground() {
 }
 
 // ── AdvancedSettingsModal ──────────────────────────────────────────────────────
+const VOLUME_STEPS = [0.0005, 0.0075, 0.0125, 0.025, 0.05];
+
 function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
   const soundEnabled = useStore((s) => s.soundEnabled);
+  const soundVolume = useStore((s) => s.soundVolume ?? 0.5);
   const hapticsEnabled = useStore((s) => s.hapticsEnabled);
   const toggleSound = useStore((s) => s.toggleSound);
+  const setSoundVolume = useStore((s) => s.setSoundVolume);
   const toggleHaptics = useStore((s) => s.toggleHaptics);
+
+  // En yakın adımı bul
+  const volStepIdx = VOLUME_STEPS.reduce(
+    (best, v, i) => Math.abs(v - soundVolume) < Math.abs(VOLUME_STEPS[best] - soundVolume) ? i : best,
+    2
+  );
 
   const slideAnim = useRef(new Animated.Value(80)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -2554,6 +2581,30 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
               </Text>
             </TouchableOpacity>
           </View>
+
+          {/* Ses Seviyesi — sadece ses açıkken göster */}
+          {soundEnabled && (
+            <View style={advStyles.volumeRow}>
+              <Text style={advStyles.volumeLabel}>SEVİYE</Text>
+              <View style={advStyles.volumeBar}>
+                {VOLUME_STEPS.map((vol, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+                      setSoundVolume(vol);
+                    }}
+                    style={[
+                      advStyles.volumeBlock,
+                      idx <= volStepIdx && advStyles.volumeBlockActive,
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={advStyles.volumeNum}>{volStepIdx + 1}/5</Text>
+            </View>
+          )}
 
           {/* Titreşim */}
           <View style={advStyles.row}>
@@ -2665,6 +2716,44 @@ const advStyles = StyleSheet.create({
   },
   toggleTxtOn: {
     color: '#aa44ff',
+  },
+  volumeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
+    gap: 10,
+  },
+  volumeLabel: {
+    color: '#7755aa',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '600',
+    letterSpacing: 2,
+    width: 52,
+  },
+  volumeBar: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 5,
+    alignItems: 'center',
+  },
+  volumeBlock: {
+    flex: 1,
+    height: 18,
+    borderRadius: 4,
+    backgroundColor: '#1a1040',
+    borderWidth: 1,
+    borderColor: '#2a1a5a',
+  },
+  volumeBlockActive: {
+    backgroundColor: '#7733cc',
+    borderColor: '#aa44ff',
+  },
+  volumeNum: {
+    color: '#aa44ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '700',
+    width: 28,
+    textAlign: 'right',
   },
   guideRow: {
     flexDirection: 'row',
@@ -3669,7 +3758,7 @@ const menuStyles = StyleSheet.create({
     gap: Math.round(SCREEN_HEIGHT * 0.03),
   },
   playBtn: {
-    width: '90%',
+    width: '85%',
     height: Math.round(SCREEN_HEIGHT * 0.080),
     borderRadius: 16,
     borderWidth: 1.5,
@@ -3690,7 +3779,7 @@ const menuStyles = StyleSheet.create({
   controlRow: {
     flexDirection: 'row',
     gap: Math.round(SCREEN_WIDTH * 0.03),
-    width: '100%',
+    width: '85%',
   },
   controlBtn: {
     flex: 1,
