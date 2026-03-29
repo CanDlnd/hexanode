@@ -14,10 +14,12 @@
     },
     "ios": {
       "supportsTablet": true,
+      "requireFullScreen": true,
       "bundleIdentifier": "com.hexanode.app"
     },
     "android": {
       "package": "com.hexanode.app",
+      "orientation": "portrait",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#0A001F"
