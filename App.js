@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useState, useEffect } from 'react';
+import React, { useRef, useCallback, useState, useEffect, useImperativeHandle } from 'react';
 import {
   View,
   Text,
@@ -40,11 +40,11 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // ── Ses Motoru ─────────────────────────────────────────────────────────────────
 const SFX = {
-  spawn:   require('./assets/sfx/spawn.wav'),
-  error:   require('./assets/sfx/error.wav'),
-  merge:   require('./assets/sfx/merge.wav'),
+  spawn: require('./assets/sfx/spawn.wav'),
+  error: require('./assets/sfx/error.wav'),
+  merge: require('./assets/sfx/merge.wav'),
   upgrade: require('./assets/sfx/upgrade.wav'),
-  click:   require('./assets/sfx/click.mp3'),
+  click: require('./assets/sfx/click.mp3'),
 };
 
 async function initAudio() {
@@ -232,11 +232,11 @@ function nearestCell(x, y, skip, tol = 1.5) {
 }
 
 function formatNum(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (n >= 100_000) return (n / 1000).toFixed(0) + 'K';
-  // ≤99 999 → ham sayı (2048, 4096, 16384, 65536 hepsi sığar)
-  return String(Math.floor(n));
+  const safe = (typeof n === 'number' && isFinite(n)) ? n : 0;
+  if (safe >= 1e9) return (safe / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  if (safe >= 1e6) return (safe / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (safe >= 100_000) return (safe / 1000).toFixed(0) + 'K';
+  return String(Math.floor(safe));
 }
 
 // Bir node'un saniye başı pasif geliri: value / 2
@@ -329,16 +329,14 @@ function pickNextValue() {
 
 // Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
 function scoreToHexaCore(cells) {
-  const total = cells.reduce((s, c) => (c ? s + c.value : s), 0);
+  if (!Array.isArray(cells)) return 1;
+  const total = cells.reduce((s, c) => (c && typeof c.value === 'number' && isFinite(c.value) ? s + c.value : s), 0);
   return Math.max(1, Math.floor(total / 100));
 }
 
-// Game Over: grid TAMAMEN dolu VE dock parçalarından hiçbiri board ile birleşemiyorsa
-function checkGameOver(cells, nextPieces = []) {
-  if (cells.some((c) => c === null)) return false; // boş hücre varsa oyun devam eder
-  const boardVals = new Set(cells.filter(Boolean).map((c) => c.value));
-  const canMerge = (nextPieces ?? []).some((v) => v != null && boardVals.has(v));
-  return !canMerge; // hiçbir dock parçası birleşemiyorsa game over
+// Game Over: Sıfır Tolerans — tahta %100 dolu ise anında oyun biter
+function checkGameOver(cells) {
+  return cells.every((c) => c !== null);
 }
 
 // ── Hex komşuluk (odd-r offset: tek satırlar sağa kaymış) ─────────────────────
@@ -484,7 +482,8 @@ const useStore = create(
       setLabOpen: (v) => set({ labOpen: v }),
 
       addCredits: (amount) => set((s) => {
-        const newCredits = s.credits + amount;
+        const safeAmount = (typeof amount === 'number' && isFinite(amount)) ? amount : 0;
+        const newCredits = (s.credits || 0) + safeAmount;
         return {
           credits: newCredits,
           highScore: Math.max(s.highScore ?? 0, newCredits),
@@ -511,7 +510,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, newPieces),
+          gameOver: checkGameOver(cr.cells),
           ...(score > 0 ? {
             credits: s.credits + score,
             highScore: Math.max(s.highScore ?? 0, s.credits + score),
@@ -539,7 +538,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, newPieces),
+          gameOver: checkGameOver(cr.cells),
           ...(score > 0 ? {
             credits: s.credits + score,
             highScore: Math.max(s.highScore ?? 0, s.credits + score),
@@ -588,7 +587,7 @@ const useStore = create(
             cells: cr.cells,
             nextPieces: newPieces,
             selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-            gameOver: checkGameOver(cr.cells, newPieces),
+            gameOver: checkGameOver(cr.cells),
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             maxNode: Math.max(s.maxNode ?? 0, newMaxNode_m),
@@ -613,7 +612,7 @@ const useStore = create(
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells, newPieces),
+          gameOver: checkGameOver(cr.cells),
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
           maxNode: Math.max(s.maxNode ?? 0, newMaxNode_e),
@@ -661,7 +660,7 @@ const useStore = create(
           const score_rd = mergeScoreFromSteps(allSteps);
           set((st) => ({
             cells: cr.cells,
-            gameOver: checkGameOver(cr.cells, s.nextPieces),
+            gameOver: checkGameOver(cr.cells),
             lockedCells: decrementLocks(lockedCells),
             previousState: snap,
             ...(score_rd > 0 ? {
@@ -692,7 +691,7 @@ const useStore = create(
         const score_sw = mergeScoreFromSteps(allSteps);
         set((st) => ({
           cells: chain2.cells,
-          gameOver: checkGameOver(chain2.cells, s.nextPieces),
+          gameOver: checkGameOver(chain2.cells),
           lockedCells: decrementLocks(lockedCells),
           previousState: snap,
           ...(score_sw > 0 ? {
@@ -733,7 +732,7 @@ const useStore = create(
           lockedCells: { ...s.lockedCells, [cellIdx]: 3 },
           previousState: snap,
           activePowerUp: null,
-          gameOver: checkGameOver(newCells, s.nextPieces),
+          gameOver: checkGameOver(newCells),
           lastChainEvent: null,
         });
         return { ok: true };
@@ -779,7 +778,7 @@ const useStore = create(
           previousState: snap,
           activePowerUp: null,
           wormholeFirstIdx: null,
-          gameOver: checkGameOver(chain2.cells, s.nextPieces),
+          gameOver: checkGameOver(chain2.cells),
           ...(score_wh > 0 ? {
             credits: st.credits + score_wh,
             highScore: Math.max(st.highScore ?? 0, st.credits + score_wh),
@@ -812,7 +811,7 @@ const useStore = create(
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(cr.cells, s.nextPieces),
+            gameOver: checkGameOver(cr.cells),
             maxNode: Math.max(s.maxNode ?? 0, newMaxNode_ol),
             ...(score_ol > 0 ? {
               credits: st.credits + score_ol,
@@ -834,7 +833,7 @@ const useStore = create(
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(exploded, s.nextPieces),
+            gameOver: checkGameOver(exploded),
             lastChainEvent: null,
             lastOverloadEvent: { cellIdx, exploded: true, id },
           });
@@ -865,11 +864,15 @@ const useStore = create(
 
       // Oyun bitti: HexaCore topla, sonra sıfırla
       collectPrestigeAndReset: () => {
-        const { cells, prestigeUpgrades } = get();
+        const { cells: rawCells, prestigeUpgrades } = get();
+        const cells = Array.isArray(rawCells) ? rawCells : [];
         const earned = scoreToHexaCore(cells);
         const richStart = prestigeUpgrades?.richStart ?? 0;
         const startCredits = 0;
-        const finalMaxNode = cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+        const finalMaxNode = cells.reduce((mx, c) => {
+          const v = c?.value;
+          return (typeof v === 'number' && isFinite(v)) ? Math.max(mx, v) : mx;
+        }, 0);
         set((s) => ({
           hexaCore: s.hexaCore + earned,
           // maxNode'u son kez güncelle (highScore addCredits/tickIncome ile zaten güncellendi)
@@ -928,14 +931,6 @@ const useStore = create(
       name: 'hexanode-storage-v13',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
-        cells: s.cells,
-        credits: s.credits,
-        uretMaliyeti: s.uretMaliyeti,
-        nextPieces: s.nextPieces,
-        selectedPieceIdx: s.selectedPieceIdx,
-        gameOver: s.gameOver,
-        lockedCells: s.lockedCells,
-        undoCostIdx: s.undoCostIdx,
         hexaCore: s.hexaCore,
         prestigeUpgrades: s.prestigeUpgrades,
         soundEnabled: s.soundEnabled,
@@ -945,15 +940,35 @@ const useStore = create(
         maxCombo: s.maxCombo,
       }),
       onRehydrateStorage: () => (state, error) => {
-        if (error) return;
-        const expectedSize = ROWS * COLS;
-        const wrongSize = state?.cells?.length !== expectedSize;
-        const hasBadCells = state?.cells?.some(
-          (c) => c !== null && (typeof c.value !== 'number' || isNaN(c.value))
-        );
-        if (wrongSize || hasBadCells) {
-          setTimeout(() => useStore.getState().resetGame(), 0);
-        }
+        // Her açılışta session state'i tamamen sıfırla (death loop engellemek için)
+        setTimeout(() => {
+          useStore.setState({
+            cells: Array(ROWS * COLS).fill(null),
+            credits: 0,
+            uretMaliyeti: 10,
+            nextPieces: [pickNextValue(), pickNextValue()],
+            selectedPieceIdx: 0,
+            gameOver: false,
+            activePowerUp: null,
+            wormholeFirstIdx: null,
+            lockedCells: {},
+            undoCostIdx: 0,
+            previousState: null,
+            lastChainEvent: null,
+            lastOverloadEvent: null,
+            currentScreen: 'MENU',
+            labOpen: false,
+          });
+          // Kalıcı alanları doğrula ve temizle
+          if (!error && state) {
+            const fixes = {};
+            if (typeof state.highScore !== 'number' || !isFinite(state.highScore)) fixes.highScore = 0;
+            if (typeof state.maxNode !== 'number' || !isFinite(state.maxNode)) fixes.maxNode = 0;
+            if (typeof state.maxCombo !== 'number' || !isFinite(state.maxCombo)) fixes.maxCombo = 0;
+            if (typeof state.hexaCore !== 'number' || !isFinite(state.hexaCore)) fixes.hexaCore = 0;
+            if (Object.keys(fixes).length > 0) useStore.setState(fixes);
+          }
+        }, 0);
       },
     }
   )
@@ -1027,7 +1042,7 @@ function FloatingText({ x, y, text, onDone, textStyle }) {
 }
 
 // ── NodeHex — SVG hex görsel ───────────────────────────────────────────────────
-function NodeHex({ value }) {
+const NodeHex = React.memo(function NodeHex({ value }) {
   const safeVal = (value && typeof value === 'number' && !isNaN(value)) ? value : 2;
   const fill = nodeColor(safeVal);
   const stroke = nodeStrokeColor(safeVal);
@@ -1063,10 +1078,51 @@ function NodeHex({ value }) {
       </SvgText>
     </Svg>
   );
-}
+});
+
+// ── GhostPiece — sürükleme sırasında parmağın üzerinde yüzen taş ─────────────
+// Animasyonlu pozisyon doğrudan Animated.ValueXY ile güncellenir → sıfır React re-render
+const GhostPiece = React.forwardRef(function GhostPiece(_, ref) {
+  const pan = useRef(new Animated.ValueXY({ x: -9999, y: -9999 })).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+  const [displayValue, setDisplayValue] = useState(2);
+
+  useImperativeHandle(ref, () => ({
+    show(val, x, y) {
+      setDisplayValue(val);
+      pan.setValue({ x: x - HEX_W / 2, y: y - HEX_R * 2.4 });
+      opacityAnim.setValue(1);
+    },
+    move(x, y) {
+      pan.setValue({ x: x - HEX_W / 2, y: y - HEX_R * 2.4 });
+    },
+    hide() {
+      opacityAnim.setValue(0);
+    },
+  }), []);
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        width: HEX_W,
+        height: HEX_H,
+        zIndex: 999,
+        elevation: 30,
+        opacity: opacityAnim,
+        transform: [{ translateX: pan.x }, { translateY: pan.y }],
+      }}
+    >
+      <NodeHex value={displayValue} />
+    </Animated.View>
+  );
+});
 
 // ── DraggableNode ─────────────────────────────────────────────────────────────
-function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onDragStart, onDragEnd, onMergedAtIdx }) {
+const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onDragStart, onDragEnd, onMergedAtIdx }) {
   const { cx, cy } = CELLS[cellIndex];
 
   const mounted = useRef(true);
@@ -1224,14 +1280,15 @@ function DraggableNode({ cellIndex, value, isDragging, justMerged, isLocked, onD
       </Animated.View>
     </Animated.View>
   );
-}
+});
 
 // ── GameOverModal ─────────────────────────────────────────────────────────────
 function GameOverModal({ visible, onOpenLab }) {
   const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
   const setScreen = useStore((s) => s.setScreen);
-  const cells = useStore((s) => s.cells);
-  const best = cells.reduce((max, c) => (c && c.value > max ? c.value : max), 0);
+  const rawCells = useStore((s) => s.cells);
+  const cells = Array.isArray(rawCells) ? rawCells : [];
+  const best = cells.reduce((max, c) => (c && typeof c.value === 'number' && isFinite(c.value) && c.value > max ? c.value : max), 0);
   const earned = scoreToHexaCore(cells);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -1274,11 +1331,11 @@ function GameOverModal({ visible, onOpenLab }) {
   });
 
   const FLOATING_NODES = [
-    { id: 1, val: '2', size: 45, left: width * 0.1, top: height * 0.15, color: '#aa44ff', duration: 3000 },
-    { id: 2, val: '8', size: 55, left: width * 0.75, top: height * 0.25, color: '#00ffe0', duration: 3500 },
-    { id: 3, val: '64', size: 35, left: width * 0.8, top: height * 0.65, color: '#ffcc44', duration: 2800 },
-    { id: 4, val: '256', size: 65, left: width * 0.12, top: height * 0.70, color: '#ff44aa', duration: 4000 },
-    { id: 5, val: '1024', size: 50, left: width * 0.5, top: height * 0.45, color: '#44aaff', duration: 3200 },
+    { id: 1, val: '2',    size: 45, left: SCREEN_WIDTH * 0.10, top: SCREEN_HEIGHT * 0.15, color: '#aa44ff', duration: 3000 },
+    { id: 2, val: '8',    size: 55, left: SCREEN_WIDTH * 0.75, top: SCREEN_HEIGHT * 0.25, color: '#00ffe0', duration: 3500 },
+    { id: 3, val: '64',   size: 35, left: SCREEN_WIDTH * 0.80, top: SCREEN_HEIGHT * 0.65, color: '#ffcc44', duration: 2800 },
+    { id: 4, val: '256',  size: 65, left: SCREEN_WIDTH * 0.12, top: SCREEN_HEIGHT * 0.70, color: '#ff44aa', duration: 4000 },
+    { id: 5, val: '1024', size: 50, left: SCREEN_WIDTH * 0.50, top: SCREEN_HEIGHT * 0.45, color: '#44aaff', duration: 3200 },
   ];
 
   const FloatingNodeItem = ({ item }) => {
@@ -1849,7 +1906,7 @@ function DyingNodesLayer({ onMerge }) {
 }
 
 // ── HexGrid ───────────────────────────────────────────────────────────────────
-function HexGrid({ onGridMeasure, isDragActive }) {
+const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
   const cells = useStore((s) => s.cells);
   const activePowerUp = useStore((s) => s.activePowerUp);
   const wormholeFirstIdx = useStore((s) => s.wormholeFirstIdx);
@@ -1985,7 +2042,7 @@ function HexGrid({ onGridMeasure, isDragActive }) {
       <ExplosionLayer />
     </View>
   );
-}
+});
 
 // ── PowerUpBtn — tek bir yetenek butonu (kırmızı flaş desteği) ──────────────
 function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
@@ -2890,8 +2947,9 @@ export default function App() {
     setScreen('LAB');
   }, [setPreviousScreen, setScreen]);
 
-  // Sürükleme ghost durumu
-  const [ghost, setGhost] = useState({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
+  // Sürükleme ghost durumu — Animated.ValueXY ile doğrudan güncellenir, setState yok → sıfır re-render
+  const ghostRef = useRef(null);
+  const [isDragActive, setIsDragActive] = useState(false);
   const dragPieceIdxRef = useRef(null);
   const gridAbsPos = useRef({ x: 0, y: 0 });
 
@@ -2913,18 +2971,20 @@ export default function App() {
   // Preview parçasından sürükleme başladı
   const handlePreviewDragStart = useCallback((pieceIdx, value, absX, absY) => {
     dragPieceIdxRef.current = pieceIdx;
-    setGhost({ active: true, value, pieceIdx, x: absX, y: absY });
+    ghostRef.current?.show(value, absX, absY);
+    setIsDragActive(true);
   }, []);
 
-  // Parmak hareket etti
+  // Parmak hareket etti — setState YOK, doğrudan Animated.ValueXY güncellenir
   const handlePreviewDragMove = useCallback((absX, absY) => {
-    setGhost((prev) => ({ ...prev, x: absX, y: absY }));
+    ghostRef.current?.move(absX, absY);
   }, []);
 
   // Parmak bırakıldı → hedef hücre bul → yerleştir
   const handlePreviewDragEnd = useCallback((absX, absY) => {
     const pi = dragPieceIdxRef.current;
-    setGhost({ active: false, value: null, pieceIdx: null, x: 0, y: 0 });
+    ghostRef.current?.hide();
+    setIsDragActive(false);
     if (absX < 0 || pi === null) return;
     const relX = absX - gridAbsPos.current.x;
     const relY = absY - gridAbsPos.current.y;
@@ -2971,7 +3031,7 @@ export default function App() {
 
       {/* Oyun Alanı */}
       <View style={styles.gridWrapper}>
-        <HexGrid onGridMeasure={handleGridMeasure} isDragActive={ghost.active} />
+        <HexGrid onGridMeasure={handleGridMeasure} isDragActive={isDragActive} />
       </View>
 
       {/* Footer — Sürüklenebilir parça önizlemeleri */}
@@ -3002,23 +3062,8 @@ export default function App() {
         <PowerUpBar />
       </View>
 
-      {/* Sürükleme ghost — parmağın biraz üzerinde yüzer */}
-      {ghost.active && (
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            left: ghost.x - HEX_W / 2,
-            top: ghost.y - HEX_R * 2.4,
-            width: HEX_W,
-            height: HEX_H,
-            zIndex: 999,
-            elevation: 30,
-          }}
-        >
-          <NodeHex value={ghost.value} />
-        </View>
-      )}
+      {/* Sürükleme ghost — Animated.ValueXY ile doğrudan konumlanır, re-render yok */}
+      <GhostPiece ref={ghostRef} />
     </SafeAreaView>
   );
 }
