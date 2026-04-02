@@ -35,6 +35,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
+import Constants from 'expo-constants';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -298,19 +299,19 @@ const PRESTIGE_UPGRADES = {
   coreMiner: {
     name: 'HexaCore Madencisi',
     desc: 'Oyun sonu kazanılan HexaCore miktarını kalıcı +%10 artırır (yığılır)',
-    costs: [50, 150, 300, 600, 1000],
+    costs: [40, 60, 80, 100, 120],
     maxLevel: 5,
   },
   skillDiscount: {
     name: 'Siber İndirim',
     desc: 'Joker yeteneklerin HexaCore bedelini %10 düşürür',
-    costs: [100, 250, 600],
+    costs: [80, 120, 160],
     maxLevel: 3,
   },
   advancedNode: {
     name: 'Gelişmiş Düğüm',
     desc: 'Dock\'a yüksek seviyeli taş (4, 8) gelme şansını artırır',
-    costs: [100, 300, 800],
+    costs: [100, 200, 300],
     maxLevel: 3,
   },
 };
@@ -468,6 +469,7 @@ const useStore = create(
       nextPieces: [pickNextValue(), pickNextValue()],
       selectedPieceIdx: 0,
       gameOver: false,
+      gamesPlayed: 0,
       lastChainEvent: null,
       // ── Power-up state ──────────────────────────────────────────────────────
       activePowerUp: null,        // 'blackhole' | 'wormhole' | 'overload' | 'rewind' | null
@@ -497,6 +499,7 @@ const useStore = create(
       setSoundVolume: (vol) => set({ soundVolume: Math.max(0, Math.min(1, vol)) }),
       toggleHaptics: () => set((s) => ({ hapticsEnabled: !s.hapticsEnabled })),
       setLabOpen: (v) => set({ labOpen: v }),
+      incrementGamesPlayed: () => set((s) => ({ gamesPlayed: s.gamesPlayed + 1 })),
 
       addCredits: (amount) => set((s) => {
         const safeAmount = (typeof amount === 'number' && isFinite(amount)) ? amount : 0;
@@ -1298,12 +1301,82 @@ const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDr
   );
 });
 
+// ── AdMob Interstitial — Expo Go'da çökmeden korunan yükleyici ───────────────
+const _isExpoGo = Constants.appOwnership === 'expo';
+
+let InterstitialAd = null;
+let TestIds = null;
+let AdEventType = null;
+if (!_isExpoGo) {
+  try {
+    const admob = require('react-native-google-mobile-ads');
+    InterstitialAd = admob.InterstitialAd;
+    TestIds = admob.TestIds;
+    AdEventType = admob.AdEventType;
+  } catch (_) { }
+}
+
 // ── GameOverModal ─────────────────────────────────────────────────────────────
 function GameOverModal({ visible, onOpenLab }) {
   const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
   const setScreen = useStore((s) => s.setScreen);
+  const incrementGamesPlayed = useStore((s) => s.incrementGamesPlayed);
+  const gamesPlayed = useStore((s) => s.gamesPlayed);
   const rawCells = useStore((s) => s.cells);
   const coreMinerLevel = useStore((s) => s.prestigeUpgrades?.coreMiner ?? 0);
+
+  const adRef = useRef(null);
+  const adLoadedRef = useRef(false);
+
+  const loadAd = useCallback(() => {
+    if (_isExpoGo || !InterstitialAd || !TestIds) return;
+    try {
+      const ad = InterstitialAd.createForAdRequest(TestIds.INTERSTITIAL, {
+        requestNonPersonalizedAdsOnly: false,
+      });
+      ad.addAdEventListener(AdEventType.LOADED, () => {
+        adLoadedRef.current = true;
+      });
+      ad.addAdEventListener(AdEventType.ERROR, () => {
+        adLoadedRef.current = false;
+      });
+      ad.load();
+      adRef.current = ad;
+    } catch (_) { }
+  }, []);
+
+  useEffect(() => {
+    loadAd();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const showAdThen = useCallback((callback) => {
+    const newCount = gamesPlayed + 1;
+    incrementGamesPlayed();
+    if (newCount % 3 !== 0) {
+      callback();
+      return;
+    }
+    if (_isExpoGo) {
+      console.log('[AdMob] Mock Ad Shown (Expo Go)');
+      callback();
+      return;
+    }
+    if (!adLoadedRef.current || !adRef.current) {
+      callback();
+      return;
+    }
+    try {
+      const unsubClose = adRef.current.addAdEventListener(AdEventType.CLOSED, () => {
+        unsubClose();
+        adLoadedRef.current = false;
+        callback();
+        loadAd();
+      });
+      adRef.current.show();
+    } catch (_) {
+      callback();
+    }
+  }, [gamesPlayed, incrementGamesPlayed, loadAd]);
   const cells = Array.isArray(rawCells) ? rawCells : [];
   const best = cells.reduce((max, c) => (c && typeof c.value === 'number' && isFinite(c.value) && c.value > max ? c.value : max), 0);
   const earned = scoreToHexaCore(cells, coreMinerLevel);
@@ -1483,7 +1556,7 @@ function GameOverModal({ visible, onOpenLab }) {
               style={styles.goRestartBtn}
               onPress={() => {
                 safeHaptic.impact(Haptics.ImpactFeedbackStyle.Heavy);
-                collectPrestigeAndReset();
+                showAdThen(() => collectPrestigeAndReset());
               }}
               activeOpacity={0.82}
             >
@@ -1507,8 +1580,10 @@ function GameOverModal({ visible, onOpenLab }) {
             style={styles.goMenuBtn}
             onPress={() => {
               safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
-              collectPrestigeAndReset();
-              setScreen('MENU');
+              showAdThen(() => {
+                collectPrestigeAndReset();
+                setScreen('MENU');
+              });
             }}
             activeOpacity={0.75}
           >
