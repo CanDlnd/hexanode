@@ -8,9 +8,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#0A001F"
+      "backgroundColor": "#08041a"
     },
     "ios": {
       "supportsTablet": true,
@@ -37,7 +35,7 @@
       [
         "react-native-google-mobile-ads",
         {
-          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "androidAppId": "ca-app-pub-9735467121072758~1322719946",
           "iosAppId": "ca-app-pub-3940256099942544~1458002511"
         }
       ],

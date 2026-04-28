@@ -1349,14 +1349,15 @@ const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDr
 // ── AdMob Interstitial — Expo Go'da çökmeden korunan yükleyici ───────────────
 const _isExpoGo = Constants.appOwnership === 'expo';
 
+// Production Interstitial Ad Unit ID (slash `/` — reklam birimi)
+const ADMOB_INTERSTITIAL_ID = 'ca-app-pub-9735467121072758/1402610997';
+
 let InterstitialAd = null;
-let TestIds = null;
 let AdEventType = null;
 if (!_isExpoGo) {
   try {
     const admob = require('react-native-google-mobile-ads');
     InterstitialAd = admob.InterstitialAd;
-    TestIds = admob.TestIds;
     AdEventType = admob.AdEventType;
   } catch (_) { }
 }
@@ -1366,7 +1367,6 @@ function GameOverModal({ visible, onOpenLab }) {
   const collectPrestigeAndReset = useStore((s) => s.collectPrestigeAndReset);
   const setScreen = useStore((s) => s.setScreen);
   const incrementGamesPlayed = useStore((s) => s.incrementGamesPlayed);
-  const gamesPlayed = useStore((s) => s.gamesPlayed);
   const rawCells = useStore((s) => s.cells);
   const coreMinerLevel = useStore((s) => s.prestigeUpgrades?.coreMiner ?? 0);
 
@@ -1374,9 +1374,9 @@ function GameOverModal({ visible, onOpenLab }) {
   const adLoadedRef = useRef(false);
 
   const loadAd = useCallback(() => {
-    if (_isExpoGo || !InterstitialAd || !TestIds) return;
+    if (_isExpoGo || !InterstitialAd) return;
     try {
-      const ad = InterstitialAd.createForAdRequest(TestIds.INTERSTITIAL, {
+      const ad = InterstitialAd.createForAdRequest(ADMOB_INTERSTITIAL_ID, {
         requestNonPersonalizedAdsOnly: false,
       });
       ad.addAdEventListener(AdEventType.LOADED, () => {
@@ -1394,34 +1394,25 @@ function GameOverModal({ visible, onOpenLab }) {
     loadAd();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const showAdThen = useCallback((callback) => {
-    const newCount = gamesPlayed + 1;
+  // Her oyun sonu modal'ı açıldığında reklamı göster
+  useEffect(() => {
+    if (!visible) return;
     incrementGamesPlayed();
-    if (newCount % 3 !== 0) {
-      callback();
-      return;
-    }
-    if (_isExpoGo) {
-      console.log('[AdMob] Mock Ad Shown (Expo Go)');
-      callback();
-      return;
-    }
-    if (!adLoadedRef.current || !adRef.current) {
-      callback();
-      return;
-    }
+    if (_isExpoGo || !adLoadedRef.current || !adRef.current) return;
     try {
       const unsubClose = adRef.current.addAdEventListener(AdEventType.CLOSED, () => {
         unsubClose();
         adLoadedRef.current = false;
-        callback();
-        loadAd();
+        loadAd(); // bir sonraki oyun için önceden yükle
       });
       adRef.current.show();
-    } catch (_) {
-      callback();
-    }
-  }, [gamesPlayed, incrementGamesPlayed, loadAd]);
+    } catch (_) { }
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Butonlarda kullanılan sade aksiyon sarmalayıcısı (artık reklam içermiyor)
+  const showAdThen = useCallback((callback) => {
+    callback();
+  }, []);
   const cells = Array.isArray(rawCells) ? rawCells : [];
   const best = cells.reduce((max, c) => (c && typeof c.value === 'number' && isFinite(c.value) && c.value > max ? c.value : max), 0);
   const earned = scoreToHexaCore(cells, coreMinerLevel);
