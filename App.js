@@ -36,6 +36,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -128,17 +129,17 @@ const C = {
   // index = log2(value) - 1  →  2→0, 4→1, 8→2, 16→3, ...
   // Sadece koyu dolgu; parlak stroke nodeStrokeArr'dan gelir
   nodeFill: [
-    '#061e3a', // 2  – derin camgöbeği
-    '#063320', // 4  – derin zümrüt
-    '#2e2200', // 8  – derin kehribar
-    '#2e1000', // 16 – derin turuncu
-    '#2e0808', // 32 – derin kırmızı
-    '#2a0028', // 64 – derin fuşya
-    '#150040', // 128 – derin mor
-    '#001840', // 256 – derin mavi
-    '#002a28', // 512 – derin teal
-    '#2a1c00', // 1024 – derin altın
-    '#200038', // 2048+ – derin kozmik mor
+    '#001a28', // 2    – derin elektrik mavi
+    '#002416', // 4    – derin neon yeşil
+    '#182200', // 8    – derin lime/sarı-yeşil   ← DEĞIŞTI (kehribardan lime'a)
+    '#2a1600', // 16   – derin turuncu
+    '#280408', // 32   – derin kırmızı
+    '#230015', // 64   – derin pembe           ← DEĞIŞTI (fuşyadan pembeye)
+    '#150038', // 128  – derin violet
+    '#00082c', // 256  – derin lacivert         ← DEĞIŞTI (maviden lacivert)
+    '#002820', // 512  – derin aqua
+    '#282000', // 1024 – derin altın/amber
+    '#220015', // 2048+ – derin gül/rose        ← DEĞIŞTI
   ],
   nodeStroke: '#6633cc',
   nodeText: '#ffffff',
@@ -273,19 +274,19 @@ function nodeColor(value) {
   return C.nodeFill[Math.min(idx, C.nodeFill.length - 1)];
 }
 
-// Her değer için parlak neon stroke rengi (dolguyla eşleşen ama parlak ton)
+// Her değer için parlak neon stroke rengi — 11 değer, renk çarkında ~33° aralıklı
 const NODE_STROKE_ARR = [
-  '#00b4ff', // 2   – neon camgöbeği
-  '#00ff88', // 4   – neon zümrüt
-  '#ffcc00', // 8   – neon kehribar
-  '#ff8800', // 16  – neon turuncu
-  '#ff3355', // 32  – neon kırmızı
-  '#ff00cc', // 64  – neon fuşya
-  '#aa44ff', // 128 – neon mor
-  '#4499ff', // 256 – neon mavi
-  '#00ffe0', // 512 – neon teal
-  '#ffdd00', // 1024 – neon altın
-  '#ee44ff', // 2048+ – neon kozmik
+  '#00ccff', // 2    – elektrik mavisi  (185°)
+  '#00ff55', // 4    – neon yeşil       (135°)
+  '#aaff00', // 8    – radyoaktif lime  (78°)  ← DEĞIŞTI: kehribardan lime'a
+  '#ff8800', // 16   – neon turuncu     (33°)
+  '#ff1133', // 32   – neon kırmızı     (355°)
+  '#ff0088', // 64   – neon hot pink    (330°) ← DEĞIŞTI: fuşyadan hot pink'e
+  '#aa22ff', // 128  – elektrik violet  (272°)
+  '#2244ff', // 256  – royal blue       (228°) ← DEĞIŞTI: açık maviden lacivert
+  '#00ffcc', // 512  – neon aqua        (165°) ← DEĞIŞTI: tealden aqua'ya
+  '#ffcc00', // 1024 – saf altın        (48°)  (8'den ~30° fark, lime ise yeşil spektrum)
+  '#ff44bb', // 2048+ – neon gül/rose   (320°) ← DEĞIŞTI
 ];
 
 function nodeStrokeColor(value) {
@@ -946,7 +947,7 @@ const useStore = create(
       },
     }),
     {
-      name: 'hexanode-storage-v13',
+      name: 'hexanode-storage-v14',
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (s) => ({
         hexaCore: s.hexaCore,
@@ -957,17 +958,17 @@ const useStore = create(
         highScore: s.highScore,
         maxNode: s.maxNode,
         maxCombo: s.maxCombo,
+        // Oyun ilerleme durumu — kaldığın yerden devam
+        cells: s.cells,
+        credits: s.credits,
+        nextPieces: s.nextPieces,
+        selectedPieceIdx: s.selectedPieceIdx,
+        gameOver: s.gameOver,
       }),
       onRehydrateStorage: () => (state, error) => {
-        // Her açılışta session state'i tamamen sıfırla (death loop engellemek için)
         setTimeout(() => {
-          useStore.setState({
-            cells: Array(ROWS * COLS).fill(null),
-            credits: 0,
-            uretMaliyeti: 10,
-            nextPieces: [pickNextValue(), pickNextValue()],
-            selectedPieceIdx: 0,
-            gameOver: false,
+          // Geçici session alanları: her açılışta temizlenir
+          const transientReset = {
             activePowerUp: null,
             wormholeFirstIdx: null,
             lockedCells: {},
@@ -977,7 +978,29 @@ const useStore = create(
             lastOverloadEvent: null,
             currentScreen: 'MENU',
             labOpen: false,
-          });
+          };
+
+          // Kayıtlı geçerli bir oyun tahtası var mı?
+          const hasSavedGame = !error && state &&
+            Array.isArray(state.cells) &&
+            state.cells.length === ROWS * COLS &&
+            state.gameOver !== true;
+
+          if (hasSavedGame) {
+            // Geçerli tahta var → sadece geçici alanları sıfırla
+            useStore.setState(transientReset);
+          } else {
+            // Kayıt yok / bozuk / oyun bitmişti → temiz başlangıç
+            useStore.setState({
+              ...transientReset,
+              cells: Array(ROWS * COLS).fill(null),
+              credits: 0,
+              uretMaliyeti: 10,
+              nextPieces: [pickNextValue(), pickNextValue()],
+              selectedPieceIdx: 0,
+              gameOver: false,
+            });
+          }
           // Kalıcı alanları doğrula ve temizle
           if (!error && state) {
             const fixes = {};
@@ -1068,12 +1091,13 @@ const NodeHex = React.memo(function NodeHex({ value }) {
   const ncx = HEX_W / 2;
   const ncy = HEX_R;
   const label = formatNum(safeVal);
-  // Karakter sayısına göre font kademeli olarak küçülür — tek satırda sığması garanti
-  const fs = label.length <= 2 ? Math.round(HEX_R * 0.44)
-    : label.length === 3 ? Math.round(HEX_R * 0.38)
-      : label.length === 4 ? Math.round(HEX_R * 0.32)
-        : label.length === 5 ? Math.round(HEX_R * 0.27)
-          : Math.round(HEX_R * 0.23); // 6+ karakter (100K, 1M vb.)
+  // Karakter bazlı font boyutu — 1 ve 2 basamak ayrı tutulur, geçişler yumuşak
+  const fs = label.length === 1 ? Math.round(HEX_R * 0.52)
+    : label.length === 2 ? Math.round(HEX_R * 0.45)
+      : label.length === 3 ? Math.round(HEX_R * 0.39)
+        : label.length === 4 ? Math.round(HEX_R * 0.34)
+          : label.length === 5 ? Math.round(HEX_R * 0.28)
+            : Math.round(HEX_R * 0.24); // 6+ karakter (100K, 1M vb.)
 
   return (
     <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
@@ -1087,11 +1111,11 @@ const NodeHex = React.memo(function NodeHex({ value }) {
       />
       {/* Değer etiketi */}
       <SvgText
-        x={ncx} y={ncy + fs * 0.36}
+        x={ncx} y={ncy + fs * 0.37}
         textAnchor="middle"
         fontSize={fs}
         fill={C.nodeText}
-        fontWeight="600"
+        fontWeight="bold"
       >
         {label}
       </SvgText>
@@ -1149,10 +1173,13 @@ const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDr
 
   const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
-  const mergeScale = useRef(new Animated.Value(justMerged ? 0.68 : 1)).current;
-  const mergeGlow = useRef(new Animated.Value(justMerged ? 1 : 0)).current;
+  const mergeScale = useRef(new Animated.Value(1)).current;
+  const mergeGlow = useRef(new Animated.Value(0)).current;
   const mountScale = useRef(new Animated.Value(0.45)).current;
   const mountOpacity = useRef(new Animated.Value(0)).current;
+
+  const cbRef = useRef({ onDragStart, onDragEnd, onMergedAtIdx, isLocked });
+  cbRef.current = { onDragStart, onDragEnd, onMergedAtIdx, isLocked };
 
   useEffect(() => {
     Animated.parallel([
@@ -1161,16 +1188,24 @@ const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDr
     ]).start();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // justMerged prop'u false→true geçişini dinle ve animasyonu ateşle
   useEffect(() => {
     if (!justMerged) return;
-    Animated.spring(mergeScale, { toValue: 1, speed: 16, bounciness: 16, useNativeDriver: false }).start();
-    Animated.timing(mergeGlow, { toValue: 0, duration: 650, useNativeDriver: false }).start(() => {
-      if (mounted.current) onMergedAtIdx(null);
+    // Animasyonları başlangıç değerlerine zorla sıfırla
+    mergeScale.stopAnimation();
+    mergeGlow.stopAnimation();
+    mergeScale.setValue(1);
+    mergeGlow.setValue(1);
+    // Siber punk şok dalgası: 1.0 → 1.3 (70ms) → yaylı geri dön 1.0
+    Animated.sequence([
+      Animated.timing(mergeScale, { toValue: 1.3, duration: 70, useNativeDriver: false }),
+      Animated.spring(mergeScale, { toValue: 1, speed: 18, bounciness: 14, useNativeDriver: false }),
+    ]).start();
+    // Neon glow patlaması: 1 → 0 (550ms), bitince mergedIdx'i temizle
+    Animated.timing(mergeGlow, { toValue: 0, duration: 550, useNativeDriver: false }).start(({ finished }) => {
+      if (finished && mounted.current) cbRef.current.onMergedAtIdx(null);
     });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const cbRef = useRef({ onDragStart, onDragEnd, onMergedAtIdx, isLocked });
-  cbRef.current = { onDragStart, onDragEnd, onMergedAtIdx, isLocked };
+  }, [justMerged]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const snapBack = useCallback(() => {
     Animated.spring(pan, { toValue: { x: 0, y: 0 }, tension: 150, friction: 10, useNativeDriver: false })
@@ -1280,12 +1315,22 @@ const DraggableNode = React.memo(function DraggableNode({ cellIndex, value, isDr
           style={[StyleSheet.absoluteFill, { opacity: mergeGlow }]}
         >
           <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
+            {/* İç parlak çerçeve */}
             <Polygon
-              points={hexPoints(HEX_W / 2, HEX_R, DRAW_R + 6)}
+              points={hexPoints(HEX_W / 2, HEX_R, DRAW_R + 4)}
               fill="none"
               stroke={nodeStrokeColor(value)}
-              strokeWidth={5}
+              strokeWidth={7}
               strokeLinejoin="miter"
+            />
+            {/* Dış şok halkası */}
+            <Polygon
+              points={hexPoints(HEX_W / 2, HEX_R, DRAW_R + 12)}
+              fill="none"
+              stroke={nodeStrokeColor(value)}
+              strokeWidth={2.5}
+              strokeLinejoin="miter"
+              opacity={0.55}
             />
           </Svg>
         </Animated.View>
@@ -1588,7 +1633,7 @@ function GameOverModal({ visible, onOpenLab }) {
             activeOpacity={0.75}
           >
             <HomeIcon size={14} color="#aaaacc" />
-            <Text style={styles.goMenuTxt}>  ANA MENÜ</Text>
+            <Text style={styles.goMenuTxt}>ANA MENÜ</Text>
           </TouchableOpacity>
         </Animated.View>
       </Animated.View>
@@ -1633,8 +1678,8 @@ function LabModal({ visible, onClose }) {
           <Text style={styles.labTitle}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
-            <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
-            <Text style={styles.labHexaCoreLabel}>  HexaCore</Text>
+            <Text style={styles.labHexaCoreNum}>{hexaCore}</Text>
+            <Text style={styles.labHexaCoreLabel}>HexaCore</Text>
           </View>
           <View style={styles.goDivider} />
 
@@ -1674,8 +1719,8 @@ function LabModal({ visible, onClose }) {
                     <Text style={styles.labUpgBtnTxt}>✓</Text>
                   ) : (
                     <View style={styles.labCostRow}>
-                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
                       <HexaCoreIcon size={12} color={canAfford ? '#dd88ff' : '#443355'} />
+                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -1709,7 +1754,7 @@ function LabScreen() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fromMenu = previousScreen === 'MENU';
-  const containerBg = fromMenu ? '#04040a' : C.modalOverlay;
+  const containerBg = fromMenu ? '#08041a' : C.modalOverlay;
 
   const UPGRADE_ROWS = [
     { id: 'coreMiner', ...PRESTIGE_UPGRADES.coreMiner },
@@ -1731,8 +1776,8 @@ function LabScreen() {
           <Text style={styles.labTitle}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
-            <Text style={styles.labHexaCoreNum}> {hexaCore}</Text>
-            <Text style={styles.labHexaCoreLabel}>  HexaCore</Text>
+            <Text style={styles.labHexaCoreNum}>{hexaCore}</Text>
+            <Text style={styles.labHexaCoreLabel}>HexaCore</Text>
           </View>
           <View style={styles.goDivider} />
 
@@ -1772,8 +1817,8 @@ function LabScreen() {
                     <Text style={styles.labUpgBtnTxt}>✓</Text>
                   ) : (
                     <View style={styles.labCostRow}>
-                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
                       <HexaCoreIcon size={12} color={canAfford ? '#dd88ff' : '#443355'} />
+                      <Text style={[styles.labUpgBtnTxt, !canAfford && { opacity: 0.45 }]}>{cost}</Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -2023,6 +2068,27 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
 
   const needsPowerTap = activePowerUp === 'blackhole' || activePowerUp === 'wormhole' || activePowerUp === 'overload';
 
+  // Yetenek vurgu pulse animasyonu — tüm hedef hücreler tek bir SVG'de, tek Value
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const pulseLoopRef = useRef(null);
+  useEffect(() => {
+    if (needsPowerTap) {
+      pulseAnim.setValue(0);
+      pulseLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1, duration: 560, useNativeDriver: false }),
+          Animated.timing(pulseAnim, { toValue: 0, duration: 560, useNativeDriver: false }),
+        ])
+      );
+      pulseLoopRef.current.start();
+    } else {
+      pulseLoopRef.current?.stop();
+      pulseAnim.setValue(0);
+    }
+  }, [needsPowerTap]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.2, 0.88] });
+
   // Grid'in ekrandaki mutlak konumunu ölç ve App'e bildir
   const measureGrid = useCallback(() => {
     if (!gridViewRef.current || !onGridMeasure) return;
@@ -2105,15 +2171,53 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
         ) : null
       )}
 
-      {/* Power-up aktifken dolu hücrelerin üstüne şeffaf dokunma alanı */}
+      {/* Yetenek pulse vurgusu — tek SVG katmanı, grid koordinatlarında altıgen */}
+      {needsPowerTap && (
+        <Animated.View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { opacity: pulseOpacity, zIndex: 150 }]}
+        >
+          <Svg width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`}>
+            {cells.map((cell, idx) => {
+              if (!cell) return null;
+              const { cx, cy } = CELLS[idx];
+              const isWFirst = wormholeFirstIdx === idx;
+              const stroke = isWFirst ? '#00eeff' : '#cc55ff';
+              const fill = isWFirst ? 'rgba(0,238,255,0.11)' : 'rgba(180,60,255,0.11)';
+              const glow = isWFirst ? 'rgba(0,238,255,0.20)' : 'rgba(180,60,255,0.20)';
+              return (
+                <React.Fragment key={`ph-${idx}`}>
+                  {/* Dış glow halkası — blur hissi */}
+                  <Polygon
+                    points={hexPoints(cx, cy, DRAW_R + 7)}
+                    fill="none"
+                    stroke={glow}
+                    strokeWidth={12}
+                    strokeLinejoin="miter"
+                  />
+                  {/* İç altıgen çerçeve + dolgu */}
+                  <Polygon
+                    points={hexPoints(cx, cy, DRAW_R - 1)}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={2.5}
+                    strokeLinejoin="miter"
+                  />
+                </React.Fragment>
+              );
+            })}
+          </Svg>
+        </Animated.View>
+      )}
+
+      {/* Power-up dokunma hedefleri — sadece touch alanı, görsel yok */}
       {needsPowerTap && cells.map((cell, idx) => {
         if (!cell) return null;
         const { cx, cy } = CELLS[idx];
-        const isWFirst = wormholeFirstIdx === idx;
         return (
           <TouchableOpacity
             key={`pu-tap-${idx}`}
-            activeOpacity={0.55}
+            activeOpacity={1}
             onPress={() => handlePowerUpCellTap(idx)}
             style={{
               position: 'absolute',
@@ -2122,8 +2226,6 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
               width: HEX_W,
               height: HEX_H,
               zIndex: 200,
-              borderRadius: 5,
-              backgroundColor: isWFirst ? 'rgba(0,238,255,0.18)' : 'rgba(160,80,255,0.15)',
             }}
           />
         );
@@ -2190,8 +2292,8 @@ function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
           <def.Icon size={iconSize} color={iconColor} />
         </View>
         <View style={styles.powerCostRow}>
-          <Text style={[styles.powerCost, { color: costColor }]}>{cost}</Text>
           <HexaCoreIcon size={11} color={hcIconColor} />
+          <Text style={[styles.powerCost, { color: costColor }]}>{cost}</Text>
         </View>
       </Animated.View>
     </TouchableOpacity>
@@ -2294,7 +2396,11 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
   const cx = PREVIEW_W / 2;
   const cy = PREVIEW_R;
   const label = formatNum(value);
-  const fs = label.length <= 2 ? Math.round(PREVIEW_R * 0.44) : Math.round(PREVIEW_R * 0.35);
+  const fs = label.length === 1 ? Math.round(PREVIEW_R * 0.52)
+    : label.length === 2 ? Math.round(PREVIEW_R * 0.45)
+      : label.length === 3 ? Math.round(PREVIEW_R * 0.39)
+        : label.length === 4 ? Math.round(PREVIEW_R * 0.33)
+          : Math.round(PREVIEW_R * 0.27);
   const pad = 10;
 
   return (
@@ -2325,11 +2431,11 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
         />
         {/* Değer etiketi */}
         <SvgText
-          x={cx} y={cy + fs * 0.36}
+          x={cx} y={cy + fs * 0.37}
           textAnchor="middle"
           fontSize={fs}
           fill={C.nodeText}
-          fontWeight="600"
+          fontWeight="bold"
         >
           {label}
         </SvgText>
@@ -2382,16 +2488,16 @@ const modalCloseBtnStyle = StyleSheet.create({
   btn: {
     alignSelf: 'center',
     marginTop: Math.round(SCREEN_WIDTH * 0.06),
-    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.1),
-    paddingVertical: Math.round(SCREEN_WIDTH * 0.03),
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: COLOR_NEON_PURPLE,
-    backgroundColor: 'rgba(153,68,255,0.08)',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.09),
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.028),
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#cc44ff',
+    backgroundColor: 'rgba(100,0,180,0.18)',
   },
   txt: {
-    color: '#ffffff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    color: '#cc44ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.028),
     fontWeight: '300',
     letterSpacing: 5,
     textAlign: 'center',
@@ -2463,14 +2569,14 @@ function GuideModal({ visible, onClose }) {
 // ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
 // amplitude: kaç px yukarı/aşağı süzüleceği
 const FLOAT_NODES = [
-  { value: 2, color: '#9944ee', x: '3%', y: '5%', size: 110, rot: 35, delay: 0, dur: 8200 },
-  { value: 8, color: '#00ffe0', x: '68%', y: '12%', size: 96, rot: -52, delay: 1100, dur: 9600 },
-  { value: 64, color: '#ffdd00', x: '44%', y: '30%', size: 128, rot: 62, delay: 500, dur: 11000 },
-  { value: 256, color: '#4488ff', x: '14%', y: '50%', size: 104, rot: -28, delay: 1900, dur: 8800 },
-  { value: 1024, color: '#cc66ff', x: '72%', y: '60%', size: 120, rot: 44, delay: 750, dur: 11400 },
-  { value: 16, color: '#00ffe0', x: '-5%', y: '74%', size: 88, rot: -68, delay: 2600, dur: 9400 },
-  { value: 512, color: '#ff4488', x: '56%', y: '78%', size: 102, rot: 72, delay: 1500, dur: 10400 },
-  { value: 4, color: '#44ddaa', x: '32%', y: '3%', size: 92, rot: -42, delay: 3200, dur: 9000 },
+  { value: 2, color: '#00ccff', x: '3%', y: '5%', size: 110, rot: 35, delay: 0, dur: 8200 },
+  { value: 8, color: '#aaff00', x: '68%', y: '12%', size: 96, rot: -52, delay: 1100, dur: 9600 },
+  { value: 64, color: '#ff0088', x: '44%', y: '30%', size: 128, rot: 62, delay: 500, dur: 11000 },
+  { value: 256, color: '#2244ff', x: '14%', y: '50%', size: 104, rot: -28, delay: 1900, dur: 8800 },
+  { value: 1024, color: '#ffcc00', x: '72%', y: '60%', size: 120, rot: 44, delay: 750, dur: 11400 },
+  { value: 16, color: '#ff8800', x: '-5%', y: '74%', size: 88, rot: -68, delay: 2600, dur: 9400 },
+  { value: 512, color: '#00ffcc', x: '56%', y: '78%', size: 102, rot: 72, delay: 1500, dur: 10400 },
+  { value: 4, color: '#00ff55', x: '32%', y: '3%', size: 92, rot: -42, delay: 3200, dur: 9000 },
 ];
 
 function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
@@ -2988,6 +3094,7 @@ const recStyles = StyleSheet.create({
 });
 
 function MainMenu() {
+  const insets = useSafeAreaInsets();
   const hexaCore = useStore((s) => s.hexaCore);
   const highScore = useStore((s) => s.highScore ?? 0);
   const maxNode = useStore((s) => s.maxNode ?? 0);
@@ -3057,7 +3164,7 @@ function MainMenu() {
         </TouchableOpacity>
 
         {/* Alt kontrol paneli: Rekorlar + Mağaza + Ayarlar */}
-        <View style={menuStyles.controlRow}>
+        <View style={[menuStyles.controlRow, { marginBottom: insets.bottom + 12 }]}>
           <TouchableOpacity
             style={menuStyles.controlBtn}
             onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
@@ -3097,6 +3204,15 @@ function MainMenu() {
 
 // ── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppInner />
+    </SafeAreaProvider>
+  );
+}
+
+function AppInner() {
+  const insets = useSafeAreaInsets();
   const cells = useStore((s) => s.cells);
   const credits = useStore((s) => s.credits);
   const uretMaliyeti = useStore((s) => s.uretMaliyeti);
@@ -3222,7 +3338,7 @@ export default function App() {
       </View>
 
       {/* Power-up çubuğu — footer'dan ayrı, navigasyon barının üstünde sabitlenmiş */}
-      <View style={styles.powerBarContainer}>
+      <View style={[styles.powerBarContainer, { paddingBottom: insets.bottom + 15 }]}>
         <PowerUpBar />
       </View>
 
@@ -3243,7 +3359,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'flex-end',
-    paddingBottom: 28,
+    paddingBottom: 20,
+    gap: 10,
   },
   headerTitleRow: {
     flexDirection: 'row',
@@ -3274,7 +3391,7 @@ const styles = StyleSheet.create({
   econCredits: {
     color: C.econCredits,
     fontSize: RFS.econCredit,
-    fontWeight: '200',
+    fontWeight: '300',
     letterSpacing: 1.5,
   },
   econSep: {
@@ -3311,8 +3428,6 @@ const styles = StyleSheet.create({
   },
   powerBarContainer: {
     alignItems: 'center',
-    // Android navigasyon barının üstüne taşmayı önlemek için yeterli boşluk
-    paddingBottom: Math.round(SCREEN_HEIGHT * 0.032),
     paddingTop: 4,
   },
   nextPiecesBlock: {
@@ -3511,50 +3626,57 @@ const styles = StyleSheet.create({
   },
   goBtnRow: {
     flexDirection: 'row',
-    padding: 16,
-    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 4,
+    gap: 14,
   },
   goRestartBtn: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 8,
+    borderRadius: 8,
     borderWidth: 1.5,
     borderColor: '#ff2266',
     backgroundColor: 'rgba(255,34,102,0.12)',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   goRestartTxt: {
     color: '#ff4488',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '700',
-    letterSpacing: 1.5,
+    fontSize: Math.round(SCREEN_WIDTH * 0.025),
+    fontWeight: '600',
+    letterSpacing: 1.6,
   },
   goLabBtn: {
     flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
+    paddingVertical: 13,
+    paddingHorizontal: 8,
+    borderRadius: 8,
     borderWidth: 1.5,
     borderColor: '#7733cc',
     backgroundColor: 'rgba(100,30,200,0.15)',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   goLabTxt: {
     color: '#aa66ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
-    fontWeight: '700',
-    letterSpacing: 1.5,
+    fontSize: Math.round(SCREEN_WIDTH * 0.025),
+    fontWeight: '600',
+    letterSpacing: 1.6,
   },
-  // (eski goLabBtnText artık kullanılmıyor — uyumluluk için boş bırak)
   goLabBtnText: {},
   goMenuBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 10,
-    paddingVertical: 9,
-    paddingHorizontal: 24,
+    gap: 6,
+    marginTop: 16,
+    marginBottom: 4,
+    paddingVertical: 13,
+    paddingHorizontal: 28,
     borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: 'rgba(255,255,255,0.04)',
     borderWidth: 1,
     borderColor: '#33334a',
     alignSelf: 'center',
@@ -3563,7 +3685,7 @@ const styles = StyleSheet.create({
     color: '#aaaacc',
     fontSize: Math.round(SCREEN_WIDTH * 0.025),
     fontWeight: '600',
-    letterSpacing: 1.2,
+    letterSpacing: 1.6,
   },
   goDivider: {
     width: '80%',
@@ -3600,15 +3722,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+    gap: 6,
   },
   labHexaCoreNum: {
     color: '#dd88ff',
-    fontSize: Math.round(SCREEN_WIDTH * 0.046),
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
     fontWeight: '300',
   },
   labHexaCoreLabel: {
     color: '#7755aa',
-    fontSize: Math.round(SCREEN_WIDTH * 0.028),
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
     fontWeight: '200',
   },
   labUpgRow: {
@@ -3670,7 +3793,7 @@ const styles = StyleSheet.create({
   labCostRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
   },
   // ── LabScreen (tam ekran mod) ─────────────────────────────────────────────
   labScreenRoot: {
@@ -3684,22 +3807,22 @@ const styles = StyleSheet.create({
   // ── EconDisplay genişletilmiş ─────────────────────────────────────────────
   econCol: {
     alignItems: 'center',
-    gap: 4,
+    gap: 8,
   },
   hexaCoreRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#2a0a55',
     backgroundColor: '#0e0228',
-    gap: 4,
+    gap: 5,
   },
   hexaCoreText: {
     color: '#9955cc',
-    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontSize: Math.round(SCREEN_WIDTH * 0.030),
     fontWeight: '200',
     letterSpacing: 1,
   },
@@ -3740,6 +3863,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 2,
+    gap: 4,
   },
   powerCostGem: {
     fontSize: Math.round(SCREEN_WIDTH * 0.022),
@@ -3779,7 +3903,6 @@ const menuStyles = StyleSheet.create({
     flex: 1,
     backgroundColor: C.bg,
     paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
-    paddingBottom: Math.round(SCREEN_HEIGHT * 0.05), // navigasyon barından kurtar
   },
   // ── Üst: Logo + HexaCore ─────────────────────────────────────────────────
   topSection: {
