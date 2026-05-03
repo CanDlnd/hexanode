@@ -4,6 +4,7 @@ import {
   Text,
   ScrollView,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   StatusBar,
   Dimensions,
@@ -37,6 +38,7 @@ import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -47,6 +49,7 @@ const SFX = {
   merge: require('./assets/sfx/merge.wav'),
   upgrade: require('./assets/sfx/upgrade.wav'),
   click: require('./assets/sfx/click.mp3'),
+  bloop: require('./assets/sfx/hexanodeBloop.mp3'),
 };
 
 async function initAudio() {
@@ -1666,7 +1669,7 @@ function LabModal({ visible, onClose }) {
       <Animated.View style={[styles.modalOverlay, { opacity: fadeAnim }]}>
         <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
           {/* Başlık */}
-          <Text style={styles.labTitle}>MAĞAZA</Text>
+          <Text style={styles.labTitle} adjustsFontSizeToFit numberOfLines={1}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
             <Text style={styles.labHexaCoreNum}>{hexaCore}</Text>
@@ -1764,7 +1767,7 @@ function LabScreen() {
       <Animated.View style={[styles.labScreenInner, { opacity: fadeAnim }]}>
         <Animated.View style={[styles.labBox, { transform: [{ translateY: slideAnim }] }]}>
           {/* Başlık */}
-          <Text style={styles.labTitle}>MAĞAZA</Text>
+          <Text style={styles.labTitle} adjustsFontSizeToFit numberOfLines={1}>MAĞAZA</Text>
           <View style={styles.labHexaCoreRow}>
             <HexaCoreIcon size={20} color="#cc66ff" />
             <Text style={styles.labHexaCoreNum}>{hexaCore}</Text>
@@ -2519,8 +2522,8 @@ function GuideModal({ visible, onClose }) {
         <Animated.View style={[guideStyles.box, { transform: [{ translateY: slideAnim }] }]}>
 
           {/* Başlık */}
-          <Text style={guideStyles.title}>SİSTEM REHBERİ</Text>
-          <Text style={guideStyles.subtitle}>N A S I L   O Y N A N I R ?</Text>
+          <Text style={guideStyles.title} adjustsFontSizeToFit numberOfLines={1}>SİSTEM REHBERİ</Text>
+          <Text style={guideStyles.subtitle} adjustsFontSizeToFit numberOfLines={1}>N A S I L   O Y N A N I R ?</Text>
           <View style={guideStyles.titleLine} />
 
           {/* Madde madde rehber — kaydırılabilir */}
@@ -2558,36 +2561,45 @@ function GuideModal({ visible, onClose }) {
 
 // ── MainMenu ────────────────────────────────────────────────────────────────────
 // ── FloatingBackground — Ana menü için uzay boşluğu nod animasyonu ───────────
-// amplitude: kaç px yukarı/aşağı süzüleceği
+// depth: 1.0 = canlı ön katman, 0.65 = orta/arka katman
 const FLOAT_NODES = [
-  { value: 2, color: '#00ccff', x: '3%', y: '5%', size: 110, rot: 35, delay: 0, dur: 8200 },
-  { value: 8, color: '#aaff00', x: '68%', y: '12%', size: 96, rot: -52, delay: 1100, dur: 9600 },
-  { value: 64, color: '#ff0088', x: '44%', y: '30%', size: 128, rot: 62, delay: 500, dur: 11000 },
-  { value: 256, color: '#2244ff', x: '14%', y: '50%', size: 104, rot: -28, delay: 1900, dur: 8800 },
-  { value: 1024, color: '#ffcc00', x: '72%', y: '60%', size: 120, rot: 44, delay: 750, dur: 11400 },
-  { value: 16, color: '#ff8800', x: '-5%', y: '74%', size: 88, rot: -68, delay: 2600, dur: 9400 },
-  { value: 512, color: '#00ffcc', x: '56%', y: '78%', size: 102, rot: 72, delay: 1500, dur: 10400 },
-  { value: 4, color: '#00ff55', x: '32%', y: '3%', size: 92, rot: -42, delay: 3200, dur: 9000 },
+  // ── Katman 1: Büyük ana nodlar ──────────────────────────────────────────────
+  { value: 2,    color: '#00ccff', x: '3%',  y: '5%',  size: 112, rot: 35,  delay: 0,    dur: 8200,  depth: 1.0 },
+  { value: 8,    color: '#aaff00', x: '68%', y: '12%', size: 96,  rot: -52, delay: 1100, dur: 9600,  depth: 1.0 },
+  { value: 64,   color: '#ff0088', x: '42%', y: '28%', size: 124, rot: 62,  delay: 500,  dur: 11000, depth: 1.0 },
+  { value: 256,  color: '#2244ff', x: '14%', y: '50%', size: 106, rot: -28, delay: 1900, dur: 8800,  depth: 1.0 },
+  { value: 1024, color: '#ffcc00', x: '70%', y: '60%', size: 118, rot: 44,  delay: 750,  dur: 11400, depth: 1.0 },
+  { value: 16,   color: '#ff8800', x: '-5%', y: '74%', size: 90,  rot: -68, delay: 2600, dur: 9400,  depth: 1.0 },
+  { value: 512,  color: '#00ffcc', x: '56%', y: '78%', size: 102, rot: 72,  delay: 1500, dur: 10400, depth: 1.0 },
+  // ── Katman 2: Orta nodlar ────────────────────────────────────────────────────
+  { value: 32,   color: '#cc44ff', x: '80%', y: '30%', size: 76,  rot: 22,  delay: 900,  dur: 10200, depth: 0.65 },
+  { value: 128,  color: '#ff4466', x: '24%', y: '82%', size: 80,  rot: -35, delay: 2100, dur: 9800,  depth: 0.65 },
+  { value: 4,    color: '#00ff55', x: '30%', y: '2%',  size: 78,  rot: -42, delay: 3200, dur: 9000,  depth: 0.65 },
+  { value: 2048, color: '#ff44bb', x: '48%', y: '65%', size: 82,  rot: 55,  delay: 3500, dur: 12000, depth: 0.65 },
+  { value: 16,   color: '#ffee00', x: '84%', y: '80%', size: 68,  rot: 48,  delay: 2800, dur: 11200, depth: 0.65 },
 ];
 
-function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
-  // Başlangıç değerini -amplitude olarak başlat: loop her iterasyonda
-  // -amp → +amp → -amp şeklinde çalışır, sonsuz düzgün sinüs hareketi
+// Tıklanınca dönüşebilecek tüm değer-renk çiftleri
+const MORPH_POOL = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+function FloatingNode({ value: initValue, color: initColor, x, y, size, rot, delay, dur, depth = 1.0 }) {
   const amplitude = Math.round(size * 0.20);
   const translateY = useRef(new Animated.Value(-amplitude)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+  const tapScale = useRef(new Animated.Value(1)).current;
+  const flashAnim = useRef(new Animated.Value(1)).current;
+  const [curValue, setCurValue] = useState(initValue);
+  const [curColor, setCurColor] = useState(initColor);
+  const [particles, setParticles] = useState([]);
 
   useEffect(() => {
-    // Fade-in — bir kez
     Animated.timing(opacity, {
-      toValue: 1,
-      duration: 2000,
+      toValue: depth,
+      duration: 2200,
       delay,
       useNativeDriver: true,
     }).start();
 
-    // Float loop — delay SADECE ilk başlatmada, loop içinde asla tekrar uygulanmaz
-    // Her iki yön de eşit süre ve aynı easing eğrisiyle → sonsuz pürüzsüz salınım
     let loopRef;
     const timer = setTimeout(() => {
       loopRef = Animated.loop(
@@ -2615,58 +2627,182 @@ function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handlePress = () => {
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    playSound('bloop');
+
+    // Bloop: hızlı büyü → spring ile sıçrayarak geri
+    Animated.sequence([
+      Animated.spring(tapScale, {
+        toValue: 1.42,
+        speed: 70,
+        bounciness: 2,
+        useNativeDriver: true,
+      }),
+      Animated.spring(tapScale, {
+        toValue: 1,
+        speed: 10,
+        bounciness: 18,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Flash → değer değiştir → geri gel
+    Animated.sequence([
+      Animated.timing(flashAnim, { toValue: 0, duration: 110, useNativeDriver: true }),
+      Animated.timing(flashAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+    ]).start();
+    setTimeout(() => {
+      setCurValue(prev => {
+        const pool = MORPH_POOL.filter(v => v !== prev);
+        const next = pool[Math.floor(Math.random() * pool.length)];
+        setCurColor(nodeStrokeColor(next));
+        return next;
+      });
+    }, 110);
+
+    // 8 parçacık oluştur — her biri farklı açı + hafif rastgele saçılım
+    const newParticles = Array.from({ length: 8 }, (_, i) => {
+      const baseAngle = (i / 8) * Math.PI * 2;
+      const jitter = (Math.random() - 0.5) * 0.7;
+      const angle = baseAngle + jitter;
+      const dist = size * (0.50 + Math.random() * 0.40);
+      return {
+        id: Date.now() + i,
+        angle,
+        dist,
+        pTx: new Animated.Value(0),
+        pTy: new Animated.Value(0),
+        pOpacity: new Animated.Value(1),
+        pScale: new Animated.Value(1),
+      };
+    });
+
+    setParticles(prev => [...prev, ...newParticles]);
+
+    newParticles.forEach(p => {
+      Animated.parallel([
+        Animated.timing(p.pTx, {
+          toValue: Math.cos(p.angle) * p.dist,
+          duration: 560,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(p.pTy, {
+          toValue: Math.sin(p.angle) * p.dist,
+          duration: 560,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(p.pOpacity, { toValue: 1, duration: 60, useNativeDriver: true }),
+          Animated.timing(p.pOpacity, { toValue: 0, duration: 500, useNativeDriver: true }),
+        ]),
+        Animated.timing(p.pScale, {
+          toValue: 0.15,
+          duration: 560,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setParticles(prev => prev.filter(pp => pp.id !== p.id));
+      });
+    });
+  };
+
   const cx = size / 2;
   const cy = size / 2;
   const r = size * 0.45;
   const pts = hexPoints(cx, cy, r);
-
-  const label = String(value);
+  const label = String(curValue);
   const fs = size * (label.length <= 2 ? 0.20 : label.length === 3 ? 0.16 : 0.13);
+  const pSz = Math.max(6, Math.round(size * 0.09));
 
   return (
     <Animated.View
-      pointerEvents="none"
       style={{
         position: 'absolute',
         left: x,
         top: y,
         width: size,
         height: size,
-        transform: [{ translateY }, { rotate: `${rot}deg` }],
+        transform: [{ translateY }, { rotate: `${rot}deg` }, { scale: tapScale }],
         opacity,
       }}
     >
-      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        {/* Dolgu */}
-        <Polygon
-          points={pts}
-          fill={`${color}15`}
-          stroke={`${color}60`}
-          strokeWidth={1.5}
-        />
-        {/* İç ince çizgi — derinlik hissi */}
-        <Polygon
-          points={hexPoints(cx, cy, r * 0.78)}
-          fill="none"
-          stroke={`${color}25`}
-          strokeWidth={1}
-        />
-        {/* Sayı — rot'u counter-rotate edince dik görünür */}
-        <SvgText
-          x={cx}
-          y={cy + fs * 0.38}
-          textAnchor="middle"
-          fill={color}
-          fontSize={fs}
-          fontWeight="bold"
-          opacity={0.80}
-          rotation={-rot}
-          originX={cx}
-          originY={cy}
-        >
-          {label}
-        </SvgText>
-      </Svg>
+      {/* flashAnim ayrı inner wrapper'da — float opacity'yi bozmaz */}
+      <Animated.View style={{ opacity: flashAnim, width: size, height: size }}>
+        <Pressable onPress={handlePress} style={{ width: size, height: size }} hitSlop={6}>
+          <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            {/* Dış parlama halkası — aura efekti */}
+            <Polygon
+              points={hexPoints(cx, cy, r * 1.22)}
+              fill={`${curColor}07`}
+              stroke={`${curColor}1c`}
+              strokeWidth={2.5}
+            />
+            {/* Ana dolgu */}
+            <Polygon
+              points={pts}
+              fill={`${curColor}18`}
+              stroke={`${curColor}75`}
+              strokeWidth={1.5}
+            />
+            {/* Orta ring — derinlik */}
+            <Polygon
+              points={hexPoints(cx, cy, r * 0.78)}
+              fill="none"
+              stroke={`${curColor}30`}
+              strokeWidth={1}
+            />
+            {/* İç küçük ring — parlama merkezi */}
+            <Polygon
+              points={hexPoints(cx, cy, r * 0.50)}
+              fill={`${curColor}08`}
+              stroke={`${curColor}18`}
+              strokeWidth={0.8}
+            />
+            {/* Sayı — rot'u counter-rotate edince dik görünür */}
+            <SvgText
+              x={cx}
+              y={cy + fs * 0.38}
+              textAnchor="middle"
+              fill={curColor}
+              fontSize={fs}
+              fontWeight="bold"
+              opacity={0.88}
+              rotation={-rot}
+              originX={cx}
+              originY={cy}
+            >
+              {label}
+            </SvgText>
+          </Svg>
+
+          {/* Parçacık patlaması */}
+          {particles.map(p => (
+            <Animated.View
+              key={p.id}
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                left: cx - pSz / 2,
+                top: cy - pSz / 2,
+                width: pSz,
+                height: pSz,
+                borderRadius: pSz / 2,
+                backgroundColor: curColor,
+                opacity: p.pOpacity,
+                transform: [
+                  { translateX: p.pTx },
+                  { translateY: p.pTy },
+                  { scale: p.pScale },
+                ],
+              }}
+            />
+          ))}
+        </Pressable>
+      </Animated.View>
     </Animated.View>
   );
 }
@@ -2674,8 +2810,11 @@ function FloatingNode({ value, color, x, y, size, rot, delay, dur }) {
 function FloatingBackground() {
   return (
     <View
-      pointerEvents="none"
-      style={[StyleSheet.absoluteFillObject, { zIndex: -1, overflow: 'hidden' }]}
+      pointerEvents="box-none"
+      style={[
+        StyleSheet.absoluteFillObject,
+        { zIndex: 1, elevation: 1, overflow: 'hidden' },
+      ]}
     >
       {FLOAT_NODES.map((n, i) => (
         <FloatingNode key={i} {...n} />
@@ -2731,7 +2870,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
     <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
       <Animated.View style={[advStyles.overlay, { opacity: fadeAnim }]}>
         <Animated.View style={[advStyles.box, { transform: [{ translateY: slideAnim }] }]}>
-          <Text style={advStyles.title}>A Y A R L A R</Text>
+          <Text style={advStyles.title} adjustsFontSizeToFit numberOfLines={1}>A Y A R L A R</Text>
 
           {/* Ses */}
           <View style={advStyles.row}>
@@ -2739,7 +2878,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
               {soundEnabled
                 ? <SoundOnIcon size={26} color="#aa44ff" />
                 : <SoundOffIcon size={26} color="#444455" />}
-              <Text style={[advStyles.rowLabel, !soundEnabled && advStyles.rowLabelOff]}>
+              <Text style={[advStyles.rowLabel, !soundEnabled && advStyles.rowLabelOff]} adjustsFontSizeToFit numberOfLines={1}>
                 {soundEnabled ? 'SES AÇIK' : 'SES KAPALI'}
               </Text>
             </View>
@@ -2757,7 +2896,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
           {/* Ses Seviyesi — sadece ses açıkken göster */}
           {soundEnabled && (
             <View style={advStyles.volumeRow}>
-              <Text style={advStyles.volumeLabel}>SEVİYE</Text>
+              <Text style={advStyles.volumeLabel} adjustsFontSizeToFit numberOfLines={1}>SEVİYE</Text>
               <View style={advStyles.volumeBar}>
                 {VOLUME_STEPS.map((vol, idx) => (
                   <TouchableOpacity
@@ -2774,7 +2913,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
                   />
                 ))}
               </View>
-              <Text style={advStyles.volumeNum}>{volStepIdx + 1}/5</Text>
+              <Text style={advStyles.volumeNum} adjustsFontSizeToFit numberOfLines={1}>{volStepIdx + 1}/5</Text>
             </View>
           )}
 
@@ -2784,7 +2923,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
               {hapticsEnabled
                 ? <VibrationOnIcon size={26} color="#aa44ff" />
                 : <VibrationOffIcon size={26} color="#444455" />}
-              <Text style={[advStyles.rowLabel, !hapticsEnabled && advStyles.rowLabelOff]}>
+              <Text style={[advStyles.rowLabel, !hapticsEnabled && advStyles.rowLabelOff]} adjustsFontSizeToFit numberOfLines={1}>
                 {hapticsEnabled ? 'TİTREŞİM AÇIK' : 'TİTREŞİM KAPALI'}
               </Text>
             </View>
@@ -2805,7 +2944,7 @@ function AdvancedSettingsModal({ visible, onClose, onOpenGuide }) {
             onPress={() => { onClose(); setTimeout(onOpenGuide, 250); }}
             activeOpacity={0.8}
           >
-            <Text style={advStyles.guideTxt}>SİSTEM REHBERİ</Text>
+            <Text style={advStyles.guideTxt} adjustsFontSizeToFit numberOfLines={1}>SİSTEM REHBERİ</Text>
             <Text style={advStyles.guideArrow}>›</Text>
           </TouchableOpacity>
 
@@ -2900,7 +3039,8 @@ const advStyles = StyleSheet.create({
     fontSize: Math.round(SCREEN_WIDTH * 0.022),
     fontWeight: '600',
     letterSpacing: 2,
-    width: 52,
+    width: Math.round(SCREEN_WIDTH * 0.155),
+    flexShrink: 0,
   },
   volumeBar: {
     flex: 1,
@@ -2924,7 +3064,8 @@ const advStyles = StyleSheet.create({
     color: '#aa44ff',
     fontSize: Math.round(SCREEN_WIDTH * 0.026),
     fontWeight: '700',
-    width: 28,
+    width: Math.round(SCREEN_WIDTH * 0.09),
+    flexShrink: 0,
     textAlign: 'right',
   },
   guideRow: {
@@ -2978,7 +3119,7 @@ function RecordsModal({ visible, onClose }) {
         <Animated.View style={[recStyles.box, { transform: [{ translateY: slideAnim }] }]}>
 
           {/* Başlık */}
-          <Text style={recStyles.title}>K A Y I T L I   V E R İ</Text>
+          <Text style={recStyles.title} adjustsFontSizeToFit numberOfLines={1}>K A Y I T L I   V E R İ</Text>
 
           {/* 3'lü kart dizisi */}
           <View style={recStyles.cardRow}>
@@ -3134,54 +3275,59 @@ function MainMenu() {
   return (
     <SafeAreaView style={menuStyles.root}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+
+      {/* Katman 1 — uçuşan arka plan (zIndex:1 / elevation:1) */}
       <FloatingBackground />
 
-      {/* ── Üst: Logo + HexaCore ─────────────────────────────────────── */}
-      <View style={menuStyles.topSection}>
-        <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
-          HEXA NODE
-        </Animated.Text>
-        <View style={menuStyles.hcRow}>
-          <HexaCoreIcon size={18} color="#aa44ff" />
-          <Text style={menuStyles.hcVal}>{hexaCore}</Text>
-          <Text style={menuStyles.hcLabel}> HexaCore</Text>
+      {/* Katman 2 — tüm UI (zIndex:2 / elevation:2), animasyonların kesinlikle üstünde */}
+      <View style={menuStyles.uiLayer} pointerEvents="box-none">
+        {/* ── Üst: Logo + HexaCore ─────────────────────────────────────── */}
+        <View style={menuStyles.topSection} pointerEvents="box-none">
+          <Animated.Text style={[menuStyles.logoText, { color: titleGlow }]}>
+            HEXA NODE
+          </Animated.Text>
+          <View style={menuStyles.hcRow}>
+            <HexaCoreIcon size={18} color="#aa44ff" />
+            <Text style={menuStyles.hcVal}>{hexaCore}</Text>
+            <Text style={menuStyles.hcLabel}> HexaCore</Text>
+          </View>
+        </View>
+
+        {/* ── Orta: OYUNA BAŞLA (ekranın tam ortası) ───────────────────── */}
+        <View style={menuStyles.centerSection} pointerEvents="box-none">
+          <TouchableOpacity style={menuStyles.playBtn} onPress={handlePlay} activeOpacity={0.82}>
+            <Text style={menuStyles.playBtnText}>OYUNA BAŞLA</Text>
+          </TouchableOpacity>
+
+          {/* Alt kontrol paneli: Rekorlar + Mağaza + Ayarlar */}
+          <View style={[menuStyles.controlRow, { marginBottom: insets.bottom + 12 }]} pointerEvents="box-none">
+            <TouchableOpacity
+              style={menuStyles.controlBtn}
+              onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
+              activeOpacity={0.8}
+            >
+              <TrophyIcon size={28} color="#ffcc44" />
+              <Text style={[menuStyles.controlBtnLabel, { color: '#ffcc44' }]}>REKORLAR</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={menuStyles.controlBtn} onPress={handleLab} activeOpacity={0.8}>
+              <ShopIcon size={28} color="#aa44ff" />
+              <Text style={menuStyles.controlBtnLabel}>MAĞAZA</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={menuStyles.controlBtn}
+              onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setSettingsOpen(true); }}
+              activeOpacity={0.8}
+            >
+              <GearIcon size={28} color="#00ffe0" />
+              <Text style={[menuStyles.controlBtnLabel, { color: '#00ffe0' }]}>AYARLAR</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
-      {/* ── Orta: OYUNA BAŞLA (ekranın tam ortası) ───────────────────── */}
-      <View style={menuStyles.centerSection}>
-        <TouchableOpacity style={menuStyles.playBtn} onPress={handlePlay} activeOpacity={0.82}>
-          <Text style={menuStyles.playBtnText}>OYUNA BAŞLA</Text>
-        </TouchableOpacity>
-
-        {/* Alt kontrol paneli: Rekorlar + Mağaza + Ayarlar */}
-        <View style={[menuStyles.controlRow, { marginBottom: insets.bottom + 12 }]}>
-          <TouchableOpacity
-            style={menuStyles.controlBtn}
-            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRecordsOpen(true); }}
-            activeOpacity={0.8}
-          >
-            <TrophyIcon size={28} color="#ffcc44" />
-            <Text style={[menuStyles.controlBtnLabel, { color: '#ffcc44' }]}>REKORLAR</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={menuStyles.controlBtn} onPress={handleLab} activeOpacity={0.8}>
-            <ShopIcon size={28} color="#aa44ff" />
-            <Text style={menuStyles.controlBtnLabel}>MAĞAZA</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={menuStyles.controlBtn}
-            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setSettingsOpen(true); }}
-            activeOpacity={0.8}
-          >
-            <GearIcon size={28} color="#00ffe0" />
-            <Text style={[menuStyles.controlBtnLabel, { color: '#00ffe0' }]}>AYARLAR</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Modaller */}
+      {/* Modaller — en üst katman */}
       <RecordsModal visible={recordsOpen} onClose={() => setRecordsOpen(false)} />
       <AdvancedSettingsModal
         visible={settingsOpen}
@@ -3194,7 +3340,14 @@ function MainMenu() {
 }
 
 // ── App ────────────────────────────────────────────────────────────────────────
+// Splash ekranı JS yüklenince hemen kapat
+SplashScreen.preventAutoHideAsync().catch(() => {});
+
 export default function App() {
+  useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   return (
     <SafeAreaProvider>
       <AppInner />
@@ -3894,6 +4047,11 @@ const menuStyles = StyleSheet.create({
     flex: 1,
     backgroundColor: C.bg,
     paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  uiLayer: {
+    flex: 1,
+    zIndex: 2,
+    elevation: 2,
   },
   // ── Üst: Logo + HexaCore ─────────────────────────────────────────────────
   topSection: {
