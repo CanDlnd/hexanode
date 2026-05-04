@@ -2564,19 +2564,19 @@ function GuideModal({ visible, onClose }) {
 // depth: 1.0 = canlı ön katman, 0.65 = orta/arka katman
 const FLOAT_NODES = [
   // ── Katman 1: Büyük ana nodlar ──────────────────────────────────────────────
-  { value: 2,    color: '#00ccff', x: '3%',  y: '5%',  size: 112, rot: 35,  delay: 0,    dur: 8200,  depth: 1.0 },
-  { value: 8,    color: '#aaff00', x: '68%', y: '12%', size: 96,  rot: -52, delay: 1100, dur: 9600,  depth: 1.0 },
-  { value: 64,   color: '#ff0088', x: '42%', y: '28%', size: 124, rot: 62,  delay: 500,  dur: 11000, depth: 1.0 },
-  { value: 256,  color: '#2244ff', x: '14%', y: '50%', size: 106, rot: -28, delay: 1900, dur: 8800,  depth: 1.0 },
-  { value: 1024, color: '#ffcc00', x: '70%', y: '60%', size: 118, rot: 44,  delay: 750,  dur: 11400, depth: 1.0 },
-  { value: 16,   color: '#ff8800', x: '-5%', y: '74%', size: 90,  rot: -68, delay: 2600, dur: 9400,  depth: 1.0 },
-  { value: 512,  color: '#00ffcc', x: '56%', y: '78%', size: 102, rot: 72,  delay: 1500, dur: 10400, depth: 1.0 },
+  { value: 2, color: '#00ccff', x: '3%', y: '5%', size: 112, rot: 35, delay: 0, dur: 8200, depth: 1.0 },
+  { value: 8, color: '#aaff00', x: '68%', y: '12%', size: 96, rot: -52, delay: 1100, dur: 9600, depth: 1.0 },
+  { value: 64, color: '#ff0088', x: '42%', y: '28%', size: 124, rot: 62, delay: 500, dur: 11000, depth: 1.0 },
+  { value: 256, color: '#2244ff', x: '14%', y: '50%', size: 106, rot: -28, delay: 1900, dur: 8800, depth: 1.0 },
+  { value: 1024, color: '#ffcc00', x: '70%', y: '60%', size: 118, rot: 44, delay: 750, dur: 11400, depth: 1.0 },
+  { value: 16, color: '#ff8800', x: '-5%', y: '74%', size: 90, rot: -68, delay: 2600, dur: 9400, depth: 1.0 },
+  { value: 512, color: '#00ffcc', x: '56%', y: '78%', size: 102, rot: 72, delay: 1500, dur: 10400, depth: 1.0 },
   // ── Katman 2: Orta nodlar ────────────────────────────────────────────────────
-  { value: 32,   color: '#cc44ff', x: '80%', y: '30%', size: 76,  rot: 22,  delay: 900,  dur: 10200, depth: 0.65 },
-  { value: 128,  color: '#ff4466', x: '24%', y: '82%', size: 80,  rot: -35, delay: 2100, dur: 9800,  depth: 0.65 },
-  { value: 4,    color: '#00ff55', x: '30%', y: '2%',  size: 78,  rot: -42, delay: 3200, dur: 9000,  depth: 0.65 },
-  { value: 2048, color: '#ff44bb', x: '48%', y: '65%', size: 82,  rot: 55,  delay: 3500, dur: 12000, depth: 0.65 },
-  { value: 16,   color: '#ffee00', x: '84%', y: '80%', size: 68,  rot: 48,  delay: 2800, dur: 11200, depth: 0.65 },
+  { value: 32, color: '#cc44ff', x: '80%', y: '30%', size: 76, rot: 22, delay: 900, dur: 10200, depth: 0.65 },
+  { value: 128, color: '#ff4466', x: '24%', y: '82%', size: 80, rot: -35, delay: 2100, dur: 9800, depth: 0.65 },
+  { value: 4, color: '#00ff55', x: '30%', y: '2%', size: 78, rot: -42, delay: 3200, dur: 9000, depth: 0.65 },
+  { value: 2048, color: '#ff44bb', x: '48%', y: '65%', size: 82, rot: 55, delay: 3500, dur: 12000, depth: 0.65 },
+  { value: 16, color: '#ffee00', x: '84%', y: '80%', size: 68, rot: 48, delay: 2800, dur: 11200, depth: 0.65 },
 ];
 
 // Tıklanınca dönüşebilecek tüm değer-renk çiftleri
@@ -3341,11 +3341,11 @@ function MainMenu() {
 
 // ── App ────────────────────────────────────────────────────────────────────────
 // Splash ekranı JS yüklenince hemen kapat
-SplashScreen.preventAutoHideAsync().catch(() => {});
+SplashScreen.preventAutoHideAsync().catch(() => { });
 
 export default function App() {
   useEffect(() => {
-    SplashScreen.hideAsync().catch(() => {});
+    SplashScreen.hideAsync().catch(() => { });
   }, []);
 
   return (
@@ -3410,8 +3410,11 @@ function AppInner() {
     ghostRef.current?.hide();
     setIsDragActive(false);
     if (absX < 0 || pi === null) return;
+    // Çarpışma testini parmak koordinatı yerine görselin merkezi üzerinden yap.
+    // GhostPiece: top = absY - HEX_R * 2.4, height = HEX_H = 2 * HEX_R
+    // → görsel merkezi Y = absY - HEX_R * 2.4 + HEX_R = absY - HEX_R * 1.4
     const relX = absX - gridAbsPos.current.x;
-    const relY = absY - gridAbsPos.current.y;
+    const relY = (absY - HEX_R * 1.4) - gridAbsPos.current.y;
     // Hem boş hem dolu hücrelere bırakılabilir (tolerans: 1.9x)
     const cellIdx = nearestCell(relX, relY, -1, 1.9);
     if (cellIdx === -1) return;

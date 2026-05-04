@@ -2,25 +2,25 @@
   "expo": {
     "name": "HexaNode",
     "slug": "hexanode",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "backgroundColor": "#0c0e12",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash.png",
-      "resizeMode": "contain",
+      "resizeMode": "cover",
       "backgroundColor": "#0c0e12"
     },
     "ios": {
       "supportsTablet": true,
       "requireFullScreen": true,
       "bundleIdentifier": "com.cdinteractive.hexanode",
-      "buildNumber": "2"
+      "buildNumber": "3"
     },
     "android": {
       "package": "com.cdinteractive.hexanode",
-      "versionCode": 2,
+      "versionCode": 3,
       "orientation": "portrait",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
