@@ -198,6 +198,22 @@ export const ShopIcon = ({ size = 28, color = '#aa44ff' }) => (
   </Svg>
 );
 
+// ── Yeniden Başlat / Döngüsel ok ikonu ───────────────────────────────────────
+export const RestartIcon = ({ size = 22, color = '#aa44ff' }) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+    <Path
+      d="M1 4v6h6"
+      stroke={color} strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+    <Path
+      d="M3.51 15a9 9 0 1 0 .49-4.5L1 10"
+      stroke={color} strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round"
+    />
+  </Svg>
+);
+
 // ── Gear / Ayarlar ikonu ───────────────────────────────────────────────────────
 export const GearIcon = ({ size = 28, color = '#00ffe0' }) => (
   <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">

@@ -14,7 +14,7 @@ import {
   Easing,
   Modal,
 } from 'react-native';
-import Svg, { Polygon, Text as SvgText } from 'react-native-svg';
+import Svg, { Polygon, Text as SvgText, Path } from 'react-native-svg';
 import {
   BlackHoleIcon,
   WormholeIcon,
@@ -30,6 +30,7 @@ import {
   HexNodeIcon,
   ShopIcon,
   GearIcon,
+  RestartIcon,
 } from './components/PowerUpIcons';
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -320,22 +321,47 @@ const PRESTIGE_UPGRADES = {
   },
 };
 
-// advancedNode seviyesine göre sonraki spawn değeri
-// Level 0: 60% → 2, 40% → 4
-// Level 1: 30% → 2, 40% → 4, 30% → 8
-// Level 2: 10% → 2, 40% → 4, 30% → 8, 20% → 16
-// Level 3: 20% → 4, 40% → 8, 30% → 16, 10% → 32
+// advancedNode seviyesine ve tahtadaki anlık maksimum değere göre dinamik taş üretimi.
+// maxOnBoard < 128  → standart havuz (prestige seviyesine göre)
+// maxOnBoard >= 128 → havuza, maxOnBoard'un daha küçük katmanları eklenir (ağırlıklı nadir)
 function pickNextValue() {
   let level = 0;
-  try { level = useStore?.getState()?.prestigeUpgrades?.advancedNode ?? 0; } catch (_) { }
-  const TABLES = [
-    [2, 2, 2, 2, 2, 2, 4, 4, 4, 4],
-    [2, 2, 2, 4, 4, 4, 4, 8, 8, 8],
-    [2, 4, 4, 4, 4, 8, 8, 8, 16, 16],
-    [4, 4, 4, 4, 8, 8, 8, 16, 16, 32],
+  let maxOnBoard = 0;
+  try {
+    const state = useStore?.getState();
+    level = state?.prestigeUpgrades?.advancedNode ?? 0;
+    const cells = state?.cells ?? [];
+    maxOnBoard = cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+  } catch (_) { }
+
+  // Prestige seviyesine göre taban havuzlar (10 slot = %100 ağırlık)
+  const BASE_TABLES = [
+    [2, 2, 2, 2, 2, 2, 4, 4, 4, 4],   // level 0: 60%→2, 40%→4
+    [2, 2, 2, 4, 4, 4, 4, 8, 8, 8],   // level 1
+    [2, 4, 4, 4, 4, 8, 8, 8, 16, 16], // level 2
+    [4, 4, 4, 4, 8, 8, 8, 16, 16, 32],// level 3
   ];
-  const table = TABLES[Math.min(level, TABLES.length - 1)];
-  return table[Math.floor(Math.random() * table.length)];
+  const pool = [...BASE_TABLES[Math.min(level, BASE_TABLES.length - 1)]];
+
+  // maxOnBoard büyüdükçe havuza nadir büyük taşlar eklenir.
+  // Eşik değerine ulaşıldığında ekstra slot(lar) eklenerek ağırlıklı olasılık artar.
+  // Örnek: maxOnBoard=1024 → pool 10+2+2+1+1 = 16 slot,
+  //        128→%12.5, 64→%6.3, 32→%12.5, 16→%12.5 olasılıkla gelir.
+  const SCALE_TIERS = [
+    { threshold: 128, value: 16, slots: 2 },
+    { threshold: 256, value: 32, slots: 2 },
+    { threshold: 512, value: 64, slots: 1 },
+    { threshold: 1024, value: 128, slots: 1 },
+    { threshold: 2048, value: 256, slots: 1 },
+  ];
+
+  for (const { threshold, value, slots } of SCALE_TIERS) {
+    if (maxOnBoard >= threshold) {
+      for (let i = 0; i < slots; i++) pool.push(value);
+    }
+  }
+
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 // Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
@@ -575,57 +601,24 @@ const useStore = create(
       },
 
       // Preview alanından direkt sürüklenerek bırakma:
-      //  • Boş hücre              → yerleştir + zincir
-      //  • Aynı değerli dolu hücre → merge (dock taşı + board taşı) + zincir
-      //  • Farklı değerli dolu     → GEÇERSİZ, snap
+      //  • Boş hücre  → yerleştir + komşu birleşme zinciri
+      //  • Dolu hücre → GEÇERSİZ (aynı değer olsa bile), taş eski yerine döner
+      // Birleşme yalnızca boş hücreye konulan taşın komşu etkileşimiyle tetiklenir.
       spawnFromPreview: (pieceIdx, cellIdx) => {
         const s = get();
         if (s.lockedCells[cellIdx]) return { ok: false, locked: true };
-        const snap = makeSnap(s);
-        const valueToPlace = s.nextPieces[pieceIdx];
         const existing = s.cells[cellIdx];
 
-        // Farklı değerli dolu hücre → yasak
-        if (existing !== null && existing.value !== valueToPlace) {
-          return { ok: false, wrongValue: true };
+        // Dolu hücreye bırakma her koşulda yasak — taş geri döner
+        if (existing !== null) {
+          return { ok: false, occupied: true };
         }
 
+        const snap = makeSnap(s);
+        const valueToPlace = s.nextPieces[pieceIdx];
         const newPieces = [...s.nextPieces];
         newPieces[pieceIdx] = pickNextValue();
         const working = [...s.cells];
-
-        if (existing !== null && existing.value === valueToPlace) {
-          // Aynı değerli merge: dock taşı board taşına uçar → 2x değer
-          working[cellIdx] = { value: valueToPlace * 2 };
-          const cr = runChainMerge(working, cellIdx);
-          const step0 = {
-            cleared: [{ fromIdx: -1, toIdx: cellIdx, value: valueToPlace }],
-            fromIdx: -1, toIdx: cellIdx,
-            mergedAt: cellIdx, waveIdx: 0, travel: true,
-          };
-          const allSteps = [step0, ...cr.steps.map((st, i) => ({ ...st, waveIdx: i + 1 }))];
-          const allCleared = [step0.cleared[0], ...cr.cleared];
-          const newMaxNode_m = cr.cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
-          const score_m = mergeScoreFromSteps(allSteps);
-          set((st) => ({
-            cells: cr.cells,
-            nextPieces: newPieces,
-            selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-            gameOver: checkGameOver(cr.cells),
-            lockedCells: decrementLocks(s.lockedCells),
-            previousState: snap,
-            maxNode: Math.max(s.maxNode ?? 0, newMaxNode_m),
-            ...(score_m > 0 ? {
-              credits: st.credits + score_m,
-              highScore: Math.max(st.highScore ?? 0, st.credits + score_m),
-            } : {}),
-            lastChainEvent: {
-              steps: allSteps, cleared: allCleared,
-              finalMergedAt: cr.mergedAt, chainDepth: allSteps.length, id: cr.id,
-            },
-          }));
-          return { ok: true, merged: true };
-        }
 
         // Boş hücre → normal yerleştir
         working[cellIdx] = { value: valueToPlace };
@@ -1606,6 +1599,8 @@ function GameOverModal({ visible, onOpenLab }) {
               style={styles.goLabBtn}
               onPress={() => {
                 safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+                // HexaCore'u bakiyeye anında ekle, ardından mağazaya geç
+                collectPrestigeAndReset();
                 onOpenLab();
               }}
               activeOpacity={0.82}
@@ -2443,26 +2438,38 @@ const GUIDE_ITEMS = [
   {
     IconComp: HexNodeIcon,
     iconColor: '#00ffe0',
-    title: 'SÜRÜKLE & BİRLEŞTİR',
-    desc: 'Alttaki taşları boş hücrelere veya aynı değerli taşların üstüne sürükle. Yerleştirince otomatik zincir kontrolü başlar.',
-  },
-  {
-    IconComp: WormholeIcon,
-    iconColor: '#00ffe0',
-    title: 'TAHTA KİLİTLİ',
-    desc: 'Tahtadaki taşlar hareket edemez! Sadece Solucan Deliği (Wormhole) güç-upu ile iki taşın yerini değiştirebilirsin.',
+    title: 'SADECE BOŞ HÜCREYE BIRAK',
+    desc: 'Alttaki taşları yalnızca boş hücrelere sürükleyebilirsin. Dolu bir hücrenin üstüne bırakmak — aynı sayı olsa bile — geçersizdir ve taş geri döner.',
   },
   {
     IconComp: OverloadIcon,
     iconColor: '#ffdd00',
-    title: 'ZİNCİRLEME REAKSİYON',
-    desc: 'Yan yana duran aynı taşlar anında birleşerek seviye atlar. Kombo ne kadar uzun olursa kredi ödülü o kadar büyür.',
+    title: 'ZİNCİRLEME BİRLEŞME',
+    desc: 'Taş boş bir hücreye konduktan sonra komşularına bakar. Aynı değerli komşular bulunursa zincir başlar: birleştikçe yeni komşular kontrol edilir, kredi katlanır.',
+  },
+  {
+    IconComp: TrophyIcon,
+    iconColor: '#ffaa22',
+    title: 'DİNAMİK TAŞ AKIŞI',
+    desc: 'Tahtandaki en büyük taş 128\'i geçince sıradaki taşlar da büyümeye başlar. 1024\'e ulaştığında havuza 16, 32, 64 gibi değerler karışır — tahta giderek daha dolu gelir.',
+  },
+  {
+    IconComp: WormholeIcon,
+    iconColor: '#00ffe0',
+    title: 'TAHTA SABİT',
+    desc: 'Tahtadaki taşlar yer değiştiremez. Yalnızca Solucan Deliği (Wormhole) güç-upu ile iki taşın konumunu birbiriyle takas edebilirsin.',
   },
   {
     IconComp: HexaCoreIcon,
     iconColor: '#aa44ff',
     title: 'HEXACORE ENERJİSİ',
-    desc: 'Oyun bitince tahtadaki taşlar HexaCore\'a dönüşür. Joker yeteneklerde ve Laboratuvar\'da kalıcı güçlenme için kullan.',
+    desc: 'Oyun bitince tahtadaki tüm taşlar HexaCore\'a dönüşür. Laboratuvar\'da kalıcı güçlenmeler satın almak için biriktirebilirsin.',
+  },
+  {
+    IconComp: RestartIcon,
+    iconColor: '#ff6644',
+    title: 'OYUNU SIFIRLA',
+    desc: 'İstediğin zaman ekranın üst köşesindeki turuncu ↺ butonuna basarak mevcut oyunu sıfırlayabilirsin. Onay ekranı çıkar, yanlışlıkla silme olmaz.',
   },
 ];
 
@@ -2822,6 +2829,158 @@ function FloatingBackground() {
     </View>
   );
 }
+
+// ── RestartConfirmModal ────────────────────────────────────────────────────────
+function RestartConfirmModal({ visible, onClose, onConfirm }) {
+  const slideAnim = useRef(new Animated.Value(60)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 240, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 20, bounciness: 5, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 60, duration: 180, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <Animated.View style={[rstStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[rstStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+
+          {/* İkon + Başlık */}
+          <View style={rstStyles.iconRow}>
+            <RestartIcon size={30} color="#ff6644" />
+          </View>
+          <Text style={rstStyles.title} adjustsFontSizeToFit numberOfLines={1}>
+            OYUNU SIFIRLA
+          </Text>
+
+          {/* Uyarı mesajı */}
+          <Text style={rstStyles.message}>
+            Mevcut oyun silinecek. Emin misiniz?
+          </Text>
+
+          <View style={rstStyles.divider} />
+
+          {/* Butonlar */}
+          <View style={rstStyles.btnRow}>
+            <TouchableOpacity
+              style={rstStyles.cancelBtn}
+              onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); onClose(); }}
+              activeOpacity={0.8}
+            >
+              <Text style={rstStyles.cancelTxt}>İ P T A L</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={rstStyles.confirmBtn}
+              onPress={() => { playSound('click'); safeHaptic.notification(Haptics.NotificationFeedbackType.Warning); onConfirm(); }}
+              activeOpacity={0.8}
+            >
+              <Text style={rstStyles.confirmTxt}>E V E T </Text>
+            </TouchableOpacity>
+          </View>
+
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const rstStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 4, 10, 0.93)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: COLOR_MODAL_BG,
+    borderWidth: 1.5,
+    borderColor: '#ff4422',
+    borderRadius: 20,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
+    elevation: 14,
+    shadowColor: '#ff4422',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.30,
+    shadowRadius: 18,
+    alignItems: 'center',
+  },
+  iconRow: {
+    marginBottom: Math.round(SCREEN_WIDTH * 0.03),
+  },
+  title: {
+    color: '#ff6644',
+    fontSize: Math.round(SCREEN_WIDTH * 0.036),
+    fontWeight: '700',
+    letterSpacing: 3,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
+  },
+  message: {
+    color: '#aa88bb',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.052),
+    marginBottom: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  divider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: 'rgba(255,68,34,0.25)',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: Math.round(SCREEN_WIDTH * 0.03),
+    width: '100%',
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a2a4a',
+    backgroundColor: '#0e0820',
+    alignItems: 'center',
+  },
+  cancelTxt: {
+    color: '#887799',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '400',
+    letterSpacing: 3,
+  },
+  confirmBtn: {
+    flex: 1.6,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ff4422',
+    backgroundColor: 'rgba(180,40,10,0.22)',
+    alignItems: 'center',
+  },
+  confirmTxt: {
+    color: '#ff7755',
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '600',
+    letterSpacing: 2,
+  },
+});
 
 // ── AdvancedSettingsModal ──────────────────────────────────────────────────────
 const VOLUME_STEPS = [0.0005, 0.0075, 0.0125, 0.025, 0.05];
@@ -3371,6 +3530,21 @@ function AppInner() {
     setScreen('LAB');
   }, [setPreviousScreen, setScreen]);
 
+  // Oyun bitti → Mağaza akışı: collectPrestigeAndReset zaten çağrıldı,
+  // mağaza kapatılınca oyun ekranına değil Ana Menü'ye dön.
+  const handleOpenLabFromGameOver = useCallback(() => {
+    setPreviousScreen('MENU');
+    setScreen('LAB');
+  }, [setPreviousScreen, setScreen]);
+
+  // Yeniden başlat
+  const resetGame = useStore((s) => s.resetGame);
+  const [restartConfirmVisible, setRestartConfirmVisible] = useState(false);
+  const handleRestartConfirm = useCallback(() => {
+    setRestartConfirmVisible(false);
+    resetGame();
+  }, [resetGame]);
+
   // Sürükleme ghost durumu — Animated.ValueXY ile doğrudan güncellenir, setState yok → sıfır re-render
   const ghostRef = useRef(null);
   const [isDragActive, setIsDragActive] = useState(false);
@@ -3438,7 +3612,14 @@ function AppInner() {
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       {/* Oyun Bitti Modalı */}
-      <GameOverModal visible={gameOver} onOpenLab={handleOpenLab} />
+      <GameOverModal visible={gameOver} onOpenLab={handleOpenLabFromGameOver} />
+
+      {/* Oyunu Sıfırla Onay Modalı */}
+      <RestartConfirmModal
+        visible={restartConfirmVisible}
+        onClose={() => setRestartConfirmVisible(false)}
+        onConfirm={handleRestartConfirm}
+      />
 
       {/* Başlık */}
       <View style={styles.header}>
@@ -3447,11 +3628,18 @@ function AppInner() {
             style={styles.homeBtn}
             onPress={handleGoMenu}
             activeOpacity={0.75}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <HomeIcon size={22} color="#aa44ff" />
+            <HomeIcon size={30} color="#aa44ff" />
           </TouchableOpacity>
-          <Text style={styles.titleMain}>HEXANODE</Text>
+          <TouchableOpacity
+            style={styles.restartBtn}
+            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRestartConfirmVisible(true); }}
+            activeOpacity={0.75}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <RestartIcon size={28} color="#ff6644" />
+          </TouchableOpacity>
         </View>
         <EconDisplay onOpenLab={handleOpenLab} />
       </View>
@@ -3512,14 +3700,22 @@ const styles = StyleSheet.create({
   headerTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'center',
+    gap: 16,
   },
   homeBtn: {
-    padding: 6,
-    borderRadius: 10,
+    padding: 10,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#3a1a6a',
     backgroundColor: '#12062a',
+  },
+  restartBtn: {
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#4a1a0a',
+    backgroundColor: '#1a0808',
   },
   titleMain: {
     color: C.titlePrimary,
