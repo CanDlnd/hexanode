@@ -13,6 +13,7 @@ import {
   Animated,
   Easing,
   Modal,
+  Platform,
 } from 'react-native';
 import Svg, { Polygon, Text as SvgText, Path } from 'react-native-svg';
 import {
@@ -1130,43 +1131,148 @@ const NodeHex = React.memo(function NodeHex({ value }) {
 });
 
 // ── GhostPiece — sürükleme sırasında parmağın üzerinde yüzen taş ─────────────
-// Animasyonlu pozisyon doğrudan Animated.ValueXY ile güncellenir → sıfır React re-render
+// Ana taş + gecikmeli trail katmanı + neon glow halkası ile siberpunk drag efekti.
+// Tüm animasyonlar Animated.ValueXY ile yönetilir → sıfır React re-render (move sırasında).
 const GhostPiece = React.forwardRef(function GhostPiece(_, ref) {
   const pan = useRef(new Animated.ValueXY({ x: -9999, y: -9999 })).current;
+  // Trail: move() ilk kez çağrılana kadar ekran dışında ve görünmez kalır
+  const trailPan = useRef(new Animated.ValueXY({ x: -9999, y: -9999 })).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const glowOpacity = useRef(new Animated.Value(0)).current;
+  const glowScale = useRef(new Animated.Value(1)).current;
+  // trailOpacity: glowOpacity'den BAĞIMSIZ — sadece move() ile artar, show()da 0'da kalır
+  const trailOpacity = useRef(new Animated.Value(0)).current;
+  // İlk hareket flag'i: show()dan sonra ilk move() çağrısını tespit eder
+  const isFirstMoveRef = useRef(true);
   const [displayValue, setDisplayValue] = useState(2);
 
   useImperativeHandle(ref, () => ({
     show(val, x, y) {
       setDisplayValue(val);
-      pan.setValue({ x: x - HEX_W / 2, y: y - HEX_R * 2.4 });
+      const pos = { x: x - HEX_W / 2, y: y - HEX_R * 2.4 };
+      pan.setValue(pos);
+      // Trail'i ekran dışında tut — ilk move() çağrısına kadar kesinlikle görünmez
+      trailPan.setValue({ x: -9999, y: -9999 });
+      trailOpacity.setValue(0);
+      isFirstMoveRef.current = true;
       opacityAnim.setValue(1);
+      Animated.parallel([
+        Animated.timing(glowOpacity, { toValue: 0.7, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+        Animated.timing(glowScale, { toValue: 1.12, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+      ]).start();
     },
     move(x, y) {
-      pan.setValue({ x: x - HEX_W / 2, y: y - HEX_R * 2.4 });
+      const pos = { x: x - HEX_W / 2, y: y - HEX_R * 2.4 };
+      pan.setValue(pos);
+
+      if (isFirstMoveRef.current) {
+        isFirstMoveRef.current = false;
+        // İlk hareket: trail'i önce parmağın tam altına ışınla (opacity hâlâ 0),
+        // ardından bir sonraki frame'de belirmeye başlat → 0,0 flicker'ı imkansız
+        trailPan.setValue(pos);
+        requestAnimationFrame(() => {
+          Animated.timing(trailOpacity, {
+            toValue: 0.35,
+            duration: 130,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: false,
+          }).start();
+        });
+      } else {
+        // Sonraki hareketler: spring ile gecikmeli takip → iz etkisi
+        Animated.spring(trailPan, {
+          toValue: pos,
+          tension: 55,
+          friction: 7,
+          useNativeDriver: false,
+        }).start();
+      }
     },
     hide() {
+      isFirstMoveRef.current = true;
+      trailOpacity.setValue(0);
+      trailPan.setValue({ x: -9999, y: -9999 });
+      Animated.parallel([
+        Animated.timing(glowOpacity, { toValue: 0, duration: 180, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+        Animated.timing(glowScale, { toValue: 1, duration: 150, easing: Easing.out(Easing.quad), useNativeDriver: false }),
+      ]).start();
       opacityAnim.setValue(0);
     },
-  }), []);
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const glowColor = nodeStrokeColor(displayValue);
+
+  // iOS: shadowColor/shadowRadius ile gerçek blur glow
+  // Android: elevation + semi-transparent arka plan katmanı ile simüle edilir
+  const iosShadow = Platform.OS === 'ios' ? {
+    shadowColor: glowColor,
+    shadowOffset: { width: 0, height: 0 },
+    shadowRadius: 12,
+    shadowOpacity: 0.85,
+  } : {};
 
   return (
-    <Animated.View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: 0,
-        top: 0,
-        width: HEX_W,
-        height: HEX_H,
-        zIndex: 999,
-        elevation: 30,
-        opacity: opacityAnim,
-        transform: [{ translateX: pan.x }, { translateY: pan.y }],
-      }}
-    >
-      <NodeHex value={displayValue} />
-    </Animated.View>
+    <>
+      {/* ── Trail katmanı: SADECE hareket sırasında belirir, ana taşı gecikmeli izler ── */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: HEX_W,
+          height: HEX_H,
+          zIndex: 997,
+          elevation: 22,
+          opacity: trailOpacity,
+          transform: [
+            { translateX: trailPan.x },
+            { translateY: trailPan.y },
+            { scale: glowScale },
+          ],
+        }}
+      >
+        <View
+          pointerEvents="none"
+          style={{
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: glowColor,
+            opacity: Platform.OS === 'android' ? 0.18 : 0.10,
+            borderRadius: HEX_R * 0.55,
+            ...(Platform.OS === 'ios' ? {
+              shadowColor: glowColor,
+              shadowOffset: { width: 0, height: 0 },
+              shadowRadius: 18,
+              shadowOpacity: 0.9,
+            } : { elevation: 14 }),
+          }}
+        />
+        <NodeHex value={displayValue} />
+      </Animated.View>
+
+      {/* ── Ana ghost taşı: parmağı 1:1 takip eder, neon glow halkasıyla ── */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: HEX_W,
+          height: HEX_H,
+          zIndex: 999,
+          elevation: 30,
+          opacity: opacityAnim,
+          transform: [
+            { translateX: pan.x },
+            { translateY: pan.y },
+            { scale: glowScale },
+          ],
+          ...iosShadow,
+        }}
+      >
+        <NodeHex value={displayValue} />
+      </Animated.View>
+    </>
   );
 });
 
@@ -2352,10 +2458,20 @@ function PowerUpBar() {
 // canDrag=false ise taş soluk/kırmızımsı görünür; sürüklenirse hata sesi çalar
 function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd }) {
   const liftAnim = useRef(new Animated.Value(1)).current;
+  // Neon glow: dokunuşta 0→1, bırakınca 1→0
+  const glowAnim = useRef(new Animated.Value(0)).current;
 
   // Her render'da güncel değerlere erişmek için ref — PanResponder closure tuzağını önler
   const cbRef = useRef({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd });
   cbRef.current = { value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd };
+
+  const _glowIn = useCallback(() => {
+    Animated.timing(glowAnim, { toValue: 1, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
+  }, [glowAnim]);
+
+  const _glowOut = useCallback(() => {
+    Animated.timing(glowAnim, { toValue: 0, duration: 280, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
+  }, [glowAnim]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -2371,6 +2487,7 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
           return;
         }
         Animated.spring(liftAnim, { toValue: 1.18, speed: 60, useNativeDriver: false }).start();
+        cbRef.current._glowIn?.();
         ds(pi, val, gs.moveX, gs.moveY);
       },
 
@@ -2380,15 +2497,21 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
 
       onPanResponderRelease: (evt, gs) => {
         Animated.spring(liftAnim, { toValue: 1, speed: 50, useNativeDriver: false }).start();
+        cbRef.current._glowOut?.();
         cbRef.current.onDragEnd(gs.moveX, gs.moveY);
       },
 
       onPanResponderTerminate: () => {
         Animated.spring(liftAnim, { toValue: 1, speed: 50, useNativeDriver: false }).start();
+        cbRef.current._glowOut?.();
         cbRef.current.onDragEnd(-9999, -9999);
       },
     })
   ).current;
+
+  // cbRef'e glow fonksiyonlarını ekle (closure güvenli)
+  cbRef.current._glowIn = _glowIn;
+  cbRef.current._glowOut = _glowOut;
 
   const fill = canDrag ? nodeColor(value) : '#2a1020';
   const stroke = canDrag ? nodeStrokeColor(value) : '#662233';
@@ -2402,44 +2525,89 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
           : Math.round(PREVIEW_R * 0.27);
   const pad = 10;
 
+  // Glow opacity: 0→0.55 — daha zarif, göze batmayan parlama
+  const glowLayerOpacity = glowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 0.55],
+  });
+  // Glow scale: dokunuşta minimal büyüme (1.0 → 1.1)
+  const glowLayerScale = glowAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.1],
+  });
+
   return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      style={{ transform: [{ scale: liftAnim }], opacity: canDrag ? 1 : 0.45 }}
-    >
-      <Svg
-        width={PREVIEW_W + pad * 2}
-        height={PREVIEW_H + pad * 2}
-        viewBox={`${-pad} ${-pad} ${PREVIEW_W + pad * 2} ${PREVIEW_H + pad * 2}`}
+    <View style={{ position: 'relative' }}>
+      {/* Neon glow halkası — taşın arkasında, dokunuşta belirir */}
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: pad,
+          top: 0,
+          width: PREVIEW_W,
+          height: PREVIEW_H,
+          opacity: glowLayerOpacity,
+          transform: [{ scale: glowLayerScale }],
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
       >
-        {/* Sürüklenebilir hint halkası */}
-        <Polygon
-          points={hexPoints(cx, cy, PREVIEW_DRAW_R + 7)}
-          fill="none"
-          stroke={stroke}
-          strokeWidth={1.5}
-          opacity={0.35}
+        <View
+          style={{
+            width: PREVIEW_W * 0.75,
+            height: PREVIEW_H * 0.75,
+            borderRadius: PREVIEW_R * 0.55,
+            backgroundColor: stroke,
+            opacity: 0.20,
+            ...(Platform.OS === 'ios' ? {
+              shadowColor: stroke,
+              shadowOffset: { width: 0, height: 0 },
+              shadowRadius: 14,
+              shadowOpacity: 0.9,
+            } : { elevation: 10 }),
+          }}
         />
-        {/* Dolgu */}
-        <Polygon
-          points={hexPoints(cx, cy, PREVIEW_DRAW_R)}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth={STROKE_W * 1.6}
-          strokeLinejoin="miter"
-        />
-        {/* Değer etiketi */}
-        <SvgText
-          x={cx} y={cy + fs * 0.37}
-          textAnchor="middle"
-          fontSize={fs}
-          fill={C.nodeText}
-          fontWeight="bold"
+      </Animated.View>
+
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={{ transform: [{ scale: liftAnim }], opacity: canDrag ? 1 : 0.45 }}
+      >
+        <Svg
+          width={PREVIEW_W + pad * 2}
+          height={PREVIEW_H + pad * 2}
+          viewBox={`${-pad} ${-pad} ${PREVIEW_W + pad * 2} ${PREVIEW_H + pad * 2}`}
         >
-          {label}
-        </SvgText>
-      </Svg>
-    </Animated.View>
+          {/* Sürüklenebilir hint halkası */}
+          <Polygon
+            points={hexPoints(cx, cy, PREVIEW_DRAW_R + 7)}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={1.5}
+            opacity={0.35}
+          />
+          {/* Dolgu */}
+          <Polygon
+            points={hexPoints(cx, cy, PREVIEW_DRAW_R)}
+            fill={fill}
+            stroke={stroke}
+            strokeWidth={STROKE_W * 1.6}
+            strokeLinejoin="miter"
+          />
+          {/* Değer etiketi */}
+          <SvgText
+            x={cx} y={cy + fs * 0.37}
+            textAnchor="middle"
+            fontSize={fs}
+            fill={C.nodeText}
+            fontWeight="bold"
+          >
+            {label}
+          </SvgText>
+        </Svg>
+      </Animated.View>
+    </View>
   );
 }
 
