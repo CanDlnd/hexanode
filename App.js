@@ -321,47 +321,57 @@ const PRESTIGE_UPGRADES = {
   },
 };
 
-// advancedNode seviyesine ve tahtadaki anlık maksimum değere göre dinamik taş üretimi.
-// maxOnBoard < 128  → standart havuz (prestige seviyesine göre)
-// maxOnBoard >= 128 → havuza, maxOnBoard'un daha küçük katmanları eklenir (ağırlıklı nadir)
-function pickNextValue() {
-  let level = 0;
+// 4 kademeli ağırlıklı üretim tablosu.
+// Her kademe maxOnBoard eşiğine göre seçilir; toplam ağırlık = 100.
+// Next Piece değeri hiçbir koşulda 32'yi geçemez.
+const SPAWN_TIERS = [
+  {
+    // Seviye 1: maxOnBoard < 128
+    maxThreshold: 128,
+    table: [{ v: 2, w: 70 }, { v: 4, w: 25 }, { v: 8, w: 5 }],
+  },
+  {
+    // Seviye 2: 128 <= maxOnBoard < 512
+    maxThreshold: 512,
+    table: [{ v: 2, w: 55 }, { v: 4, w: 30 }, { v: 8, w: 10 }, { v: 16, w: 5 }],
+  },
+  {
+    // Seviye 3: 512 <= maxOnBoard < 1024
+    maxThreshold: 1024,
+    table: [{ v: 2, w: 45 }, { v: 4, w: 35 }, { v: 8, w: 12 }, { v: 16, w: 6 }, { v: 32, w: 2 }],
+  },
+  {
+    // Seviye 4: maxOnBoard >= 1024
+    maxThreshold: Infinity,
+    table: [{ v: 2, w: 40 }, { v: 4, w: 30 }, { v: 8, w: 15 }, { v: 16, w: 10 }, { v: 32, w: 5 }],
+  },
+];
+
+function weightedPick(table) {
+  const rand = Math.random() * 100;
+  let cumulative = 0;
+  for (const { v, w } of table) {
+    cumulative += w;
+    if (rand < cumulative) return v;
+  }
+  return table[table.length - 1].v;
+}
+
+function pickNextValue(resetMode = false) {
+  // Sıfırlama: eski board okunmadan, daima sadece 2 veya 4 üret
+  if (resetMode) {
+    return Math.random() < 0.7 ? 2 : 4;
+  }
+
   let maxOnBoard = 0;
   try {
     const state = useStore?.getState();
-    level = state?.prestigeUpgrades?.advancedNode ?? 0;
     const cells = state?.cells ?? [];
     maxOnBoard = cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
   } catch (_) { }
 
-  // Prestige seviyesine göre taban havuzlar (10 slot = %100 ağırlık)
-  const BASE_TABLES = [
-    [2, 2, 2, 2, 2, 2, 4, 4, 4, 4],   // level 0: 60%→2, 40%→4
-    [2, 2, 2, 4, 4, 4, 4, 8, 8, 8],   // level 1
-    [2, 4, 4, 4, 4, 8, 8, 8, 16, 16], // level 2
-    [4, 4, 4, 4, 8, 8, 8, 16, 16, 32],// level 3
-  ];
-  const pool = [...BASE_TABLES[Math.min(level, BASE_TABLES.length - 1)]];
-
-  // maxOnBoard büyüdükçe havuza nadir büyük taşlar eklenir.
-  // Eşik değerine ulaşıldığında ekstra slot(lar) eklenerek ağırlıklı olasılık artar.
-  // Örnek: maxOnBoard=1024 → pool 10+2+2+1+1 = 16 slot,
-  //        128→%12.5, 64→%6.3, 32→%12.5, 16→%12.5 olasılıkla gelir.
-  const SCALE_TIERS = [
-    { threshold: 128, value: 16, slots: 2 },
-    { threshold: 256, value: 32, slots: 2 },
-    { threshold: 512, value: 64, slots: 1 },
-    { threshold: 1024, value: 128, slots: 1 },
-    { threshold: 2048, value: 256, slots: 1 },
-  ];
-
-  for (const { threshold, value, slots } of SCALE_TIERS) {
-    if (maxOnBoard >= threshold) {
-      for (let i = 0; i < slots; i++) pool.push(value);
-    }
-  }
-
-  return pool[Math.floor(Math.random() * pool.length)];
+  const tier = SPAWN_TIERS.find(t => maxOnBoard < t.maxThreshold) ?? SPAWN_TIERS[SPAWN_TIERS.length - 1];
+  return weightedPick(tier.table);
 }
 
 // Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
@@ -897,7 +907,7 @@ const useStore = create(
           cells: Array(ROWS * COLS).fill(null),
           credits: startCredits,
           uretMaliyeti: 10,
-          nextPieces: [pickNextValue(), pickNextValue()],
+          nextPieces: [pickNextValue(true), pickNextValue(true)],
           selectedPieceIdx: 0,
           gameOver: false,
           activePowerUp: null,
@@ -930,7 +940,7 @@ const useStore = create(
           cells: Array(ROWS * COLS).fill(null),
           credits: 0,
           uretMaliyeti: 10,
-          nextPieces: [pickNextValue(), pickNextValue()],
+          nextPieces: [pickNextValue(true), pickNextValue(true)],
           selectedPieceIdx: 0,
           gameOver: false,
           activePowerUp: null,
@@ -992,7 +1002,7 @@ const useStore = create(
               cells: Array(ROWS * COLS).fill(null),
               credits: 0,
               uretMaliyeti: 10,
-              nextPieces: [pickNextValue(), pickNextValue()],
+              nextPieces: [pickNextValue(true), pickNextValue(true)],
               selectedPieceIdx: 0,
               gameOver: false,
             });
