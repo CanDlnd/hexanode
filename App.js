@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useState, useEffect, useImperativeHandle } from 'react';
+import React, { useRef, useCallback, useState, useEffect, useMemo, useImperativeHandle } from 'react';
 import {
   View,
   Text,
@@ -14,8 +14,21 @@ import {
   Easing,
   Modal,
   Platform,
+  Alert,
+  unstable_batchedUpdates,
 } from 'react-native';
-import Svg, { Polygon, Text as SvgText, Path } from 'react-native-svg';
+import Svg, {
+  Polygon,
+  Text as SvgText,
+  Path,
+  Defs,
+  RadialGradient,
+  LinearGradient as SvgLinearGradient,
+  Rect as SvgRect,
+  Stop as SvgStop,
+  Circle as SvgCircle,
+  Line as SvgLine,
+} from 'react-native-svg';
 import {
   BlackHoleIcon,
   WormholeIcon,
@@ -218,6 +231,41 @@ function buildCells() {
 
 const CELLS = buildCells();
 
+// ── Yapısal köşe hücreleri (HexaCore ile kalıcı açılabilir) ───────────────────
+const LOCKED_CELL_INDICES = new Set([0, 3, 12, 15]);
+const CORNER_UNLOCK_COST = 150;
+
+function getUnlockedCorners() {
+  try {
+    const u = useStore?.getState()?.unlockedCorners;
+    return Array.isArray(u) ? u : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+/** Köşe hâlâ oynanamaz (açılmamış yapısal kilit). */
+function isCornerPlayBlocked(cellIdx, unlockedCorners) {
+  if (!LOCKED_CELL_INDICES.has(cellIdx)) return false;
+  return !(unlockedCorners ?? []).includes(cellIdx);
+}
+
+// Oynanabilir (kilitli köşe hariç) boş hücre sayısı — tehlike modu için
+function countPlayableEmptyCells(cells, unlockedCorners) {
+  if (!Array.isArray(cells)) return 0;
+  let n = 0;
+  for (let i = 0; i < cells.length; i++) {
+    if (!isCornerPlayBlocked(i, unlockedCorners) && cells[i] === null) n++;
+  }
+  return n;
+}
+
+// Kilit ikonu ölçüleri (HEX_R'ye orantılı, compile-time sabit)
+const LOCK_S = HEX_R * 0.25;  // temel birim
+const LOCK_FILL = '#1e1240'; // koyu arkaplan
+const LOCK_STROKE = '#5a4b8a'; // loş neon-mor kontur
+const LOCK_SHACKLE = '#4a3b7d'; // kelepçe tonu
+
 // ── Duyarlı yazı boyutları ────────────────────────────────────────────────────
 const RFS = {
   title: Math.round(SCREEN_WIDTH * 0.076),
@@ -238,6 +286,7 @@ function nearestCell(x, y, skip, tol = 1.5) {
   let bestD = Infinity;
   CELLS.forEach(({ cx, cy }, i) => {
     if (i === skip) return;
+    if (isCornerPlayBlocked(i, getUnlockedCorners())) return;
     const d = Math.hypot(x - cx, y - cy);
     if (d < bestD) { bestD = d; best = i; }
   });
@@ -300,6 +349,23 @@ function nodeStrokeColor(value) {
   return NODE_STROKE_ARR[Math.min(idx, NODE_STROKE_ARR.length - 1)];
 }
 
+function nodeLabelFontSize(label, hexR) {
+  const len = label.length;
+  if (len === 1) return Math.round(hexR * 0.52);
+  if (len === 2) return Math.round(hexR * 0.45);
+  if (len === 3) return Math.round(hexR * 0.39);
+  if (len === 4) return Math.round(hexR * 0.34);
+  if (len === 5) return Math.round(hexR * 0.28);
+  return Math.round(hexR * 0.24);
+}
+
+const hexLabelTextStyle = {
+  color: '#ffffff',
+  fontWeight: 'bold',
+  textAlign: 'center',
+  includeFontPadding: false,
+};
+
 // ── Prestij sabitleri ─────────────────────────────────────────────────────────
 const PRESTIGE_UPGRADES = {
   coreMiner: {
@@ -316,37 +382,33 @@ const PRESTIGE_UPGRADES = {
   },
   advancedNode: {
     name: 'Gelişmiş Düğüm',
-    desc: 'Dock\'a yüksek seviyeli taş (4, 8) gelme şansını artırır',
+    desc: 'Daha yüksek değerli taşların (4 ve 8) çıkma şansını kalıcı olarak artırır.',
     costs: [100, 200, 300],
     maxLevel: 3,
   },
 };
 
-// 4 kademeli ağırlıklı üretim tablosu.
-// Her kademe maxOnBoard eşiğine göre seçilir; toplam ağırlık = 100.
-// Next Piece değeri hiçbir koşulda 32'yi geçemez.
-const SPAWN_TIERS = [
-  {
-    // Seviye 1: maxOnBoard < 128
-    maxThreshold: 128,
-    table: [{ v: 2, w: 70 }, { v: 4, w: 25 }, { v: 8, w: 5 }],
-  },
-  {
-    // Seviye 2: 128 <= maxOnBoard < 512
-    maxThreshold: 512,
-    table: [{ v: 2, w: 55 }, { v: 4, w: 30 }, { v: 8, w: 10 }, { v: 16, w: 5 }],
-  },
-  {
-    // Seviye 3: 512 <= maxOnBoard < 1024
-    maxThreshold: 1024,
-    table: [{ v: 2, w: 45 }, { v: 4, w: 35 }, { v: 8, w: 12 }, { v: 16, w: 6 }, { v: 32, w: 2 }],
-  },
-  {
-    // Seviye 4: maxOnBoard >= 1024
-    maxThreshold: Infinity,
-    table: [{ v: 2, w: 40 }, { v: 4, w: 30 }, { v: 8, w: 15 }, { v: 16, w: 10 }, { v: 32, w: 5 }],
-  },
-];
+// ── Ortak ağırlıklı dock / spawn havuzu ──────────────────────────────────────
+// 16 ve 32 sistem tarafından asla üretilmez; yalnızca birleşme ile oluşabilir.
+const SPAWN_UNLOCK_8_AT_MAX = 128;
+const EMPTY_CELLS_FOR_SPAWN = () => Array(ROWS * COLS).fill(null);
+
+function maxTileOnCells(cells) {
+  if (!Array.isArray(cells)) return 0;
+  return cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+}
+
+function spawnWeightTable(maxTileOnBoard, advancedNodeLevel = 0) {
+  const lvl = Math.max(0, Math.min(3, Math.floor(advancedNodeLevel) || 0));
+  if (maxTileOnBoard < SPAWN_UNLOCK_8_AT_MAX) {
+    return [{ v: 2, w: 75 - lvl * 2 }, { v: 4, w: 25 + lvl * 2 }];
+  }
+  return [
+    { v: 2, w: 75 - lvl * 3 },
+    { v: 4, w: 20 + lvl * 2 },
+    { v: 8, w: 5 + lvl * 1 },
+  ];
+}
 
 function weightedPick(table) {
   const rand = Math.random() * 100;
@@ -358,21 +420,30 @@ function weightedPick(table) {
   return table[table.length - 1].v;
 }
 
-function pickNextValue(resetMode = false) {
-  // Sıfırlama: eski board okunmadan, daima sadece 2 veya 4 üret
-  if (resetMode) {
-    return Math.random() < 0.7 ? 2 : 4;
-  }
-
-  let maxOnBoard = 0;
+// Bir sonraki dock parçası — cells mümkünse merge sonrası güncel tahta (128 eşiği doğru hesaplanır).
+function pickNextSpawnValue(cells) {
+  let advancedNodeLevel = 0;
   try {
-    const state = useStore?.getState();
-    const cells = state?.cells ?? [];
-    maxOnBoard = cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
+    advancedNodeLevel = useStore?.getState()?.prestigeUpgrades?.advancedNode ?? 0;
   } catch (_) { }
+  return weightedPick(spawnWeightTable(maxTileOnCells(cells), advancedNodeLevel));
+}
 
-  const tier = SPAWN_TIERS.find(t => maxOnBoard < t.maxThreshold) ?? SPAWN_TIERS[SPAWN_TIERS.length - 1];
-  return weightedPick(tier.table);
+function previewDockValueValid(value, maxTile) {
+  if (value === 2 || value === 4) return true;
+  if (value === 8) return maxTile >= SPAWN_UNLOCK_8_AT_MAX;
+  return false;
+}
+
+/** Eski kayıtlardaki 16/32 veya geçersiz dock değerlerini aynı havuzla yeniler. */
+function sanitizeNextPieces(nextPieces, cells) {
+  const maxTile = maxTileOnCells(cells);
+  const safe = Array.isArray(nextPieces) && nextPieces.length === 2
+    ? [...nextPieces]
+    : [pickNextSpawnValue(cells), pickNextSpawnValue(cells)];
+  return safe.map((v) =>
+    (typeof v === 'number' && previewDockValueValid(v, maxTile)) ? v : pickNextSpawnValue(cells)
+  );
 }
 
 // Tahta skorunu HexaCore'a dönüştür (1 HexaCore = 100 skor)
@@ -385,9 +456,18 @@ function scoreToHexaCore(cells, coreMinerLevel = 0) {
   return Math.floor(base * multiplier);
 }
 
-// Game Over: Sıfır Tolerans — tahta %100 dolu ise anında oyun biter
+// Game Over: Sıfır Tolerans — 12 aktif hücrenin tamamı dolu ise anında oyun biter
 function checkGameOver(cells) {
-  return cells.every((c) => c !== null);
+  const unlocked = getUnlockedCorners();
+  return cells.every((c, i) => isCornerPlayBlocked(i, unlocked) || c !== null);
+}
+
+// Tahta doluysa Son Şans sun; kullanıldıysa doğrudan game over
+function resolveGameEndState(cells, hasUsedLastChance) {
+  const boardFull = checkGameOver(cells);
+  if (!boardFull) return { gameOver: false, lastChancePending: false };
+  if (!hasUsedLastChance) return { gameOver: false, lastChancePending: true };
+  return { gameOver: true, lastChancePending: false };
 }
 
 // ── Hex komşuluk (odd-r offset: tek satırlar sağa kaymış) ─────────────────────
@@ -403,6 +483,37 @@ function hexNeighborIndices(cellIdx) {
     .map(([dr, dc]) => [row + dr, col + dc])
     .filter(([r, c]) => r >= 0 && r < ROWS && c >= 0 && c < COLS)
     .map(([r, c]) => r * COLS + c);
+}
+
+// Kısıtlı rastgele başlangıç: 2 adet '2', hex komşu olmayan oynanabilir hücrelerde
+function seedStarterTiles(unlockedCorners) {
+  const cells = Array(ROWS * COLS).fill(null);
+  const unlocked = unlockedCorners ?? getUnlockedCorners();
+  const playable = [];
+  for (let i = 0; i < cells.length; i++) {
+    if (!isCornerPlayBlocked(i, unlocked)) playable.push(i);
+  }
+  if (playable.length < 2) return cells;
+
+  const firstIdx = playable[Math.floor(Math.random() * playable.length)];
+  const neighborSet = new Set(hexNeighborIndices(firstIdx));
+  const nonAdjacent = playable.filter((i) => i !== firstIdx && !neighborSet.has(i));
+
+  const pool = nonAdjacent.length > 0 ? nonAdjacent : playable.filter((i) => i !== firstIdx);
+  if (!pool.length) return cells;
+
+  const secondIdx = pool[Math.floor(Math.random() * pool.length)];
+  cells[firstIdx] = { value: 2 };
+  cells[secondIdx] = { value: 2 };
+  return cells;
+}
+
+function createNewGameState(unlockedCorners = []) {
+  const cells = seedStarterTiles(unlockedCorners);
+  return {
+    cells,
+    nextPieces: [pickNextSpawnValue(cells), pickNextSpawnValue(cells)],
+  };
 }
 
 // ── Zincirleme birleşme motoru — Fermuar (Zipper) + Yıldız (Star) hibrit ─────
@@ -483,7 +594,6 @@ function makeSnap(s) {
   return {
     cells: [...s.cells],
     credits: s.credits,
-    uretMaliyeti: s.uretMaliyeti,
     nextPieces: [...s.nextPieces],
     selectedPieceIdx: s.selectedPieceIdx,
     lockedCells: { ...s.lockedCells },
@@ -501,15 +611,19 @@ function decrementLocks(lockedCells) {
 }
 
 // ── Zustand Store ──────────────────────────────────────────────────────────────
+const _bootGame = createNewGameState([]);
+
 const useStore = create(
   persist(
     (set, get) => ({
-      cells: Array(ROWS * COLS).fill(null),
+      cells: _bootGame.cells,
       credits: 0,
-      uretMaliyeti: 10,
-      nextPieces: [pickNextValue(), pickNextValue()],
+      nextPieces: _bootGame.nextPieces,
       selectedPieceIdx: 0,
       gameOver: false,
+      lastChancePending: false,   // session: tahta dolunca Son Şans modalı
+      hasUsedLastChance: false,   // session: el başına tek kurtarma
+      dragTutorialDismissed: false, // session: ilk dock yerleştirme ipucu
       gamesPlayed: 0,
       lastChainEvent: null,
       // ── Power-up state ──────────────────────────────────────────────────────
@@ -519,8 +633,10 @@ const useStore = create(
       undoCostIdx: 0,             // UNDO_COSTS dizisindeki pozisyon
       previousState: null,        // son hamle öncesi snapshot (undo için)
       lastOverloadEvent: null,    // { cellIdx, exploded, id }
+      lastChanceRemoveEvent: null, // { cellIdx, value, id } — Son Şans silme vurgusu
       // ── Prestij state ───────────────────────────────────────────────────────
       hexaCore: 0,               // kalıcı prestij para birimi (başlangıç hediyesi)
+      unlockedCorners: [],       // HexaCore ile kalıcı açılan köşe indeksleri (0,3,12,15)
       prestigeUpgrades: { coreMiner: 0, skillDiscount: 0, advancedNode: 0 },
       // ── Rekor state (kalıcı) ────────────────────────────────────────────────
       highScore: 0,               // ulaşılan en yüksek kredi miktarı
@@ -542,6 +658,10 @@ const useStore = create(
       setLabOpen: (v) => set({ labOpen: v }),
       incrementGamesPlayed: () => set((s) => ({ gamesPlayed: s.gamesPlayed + 1 })),
 
+      dismissDragTutorial: () => set({ dragTutorialDismissed: true }),
+
+      clearLastChanceRemoveEvent: () => set({ lastChanceRemoveEvent: null }),
+
       addCredits: (amount) => set((s) => {
         const safeAmount = (typeof amount === 'number' && isFinite(amount)) ? amount : 0;
         const newCredits = (s.credits || 0) + safeAmount;
@@ -553,10 +673,69 @@ const useStore = create(
 
       selectPiece: (idx) => set({ selectedPieceIdx: idx }),
 
+      unlockCorner: (cellIdx, cost) => {
+        const s = get();
+        if (!LOCKED_CELL_INDICES.has(cellIdx)) return { ok: false };
+        const unlocked = s.unlockedCorners ?? [];
+        if (unlocked.includes(cellIdx)) return { ok: false, already: true };
+        const price = typeof cost === 'number' && cost > 0 ? cost : CORNER_UNLOCK_COST;
+        if (s.hexaCore < price) return { ok: false, noHC: true };
+        const nextUnlocked = [...unlocked, cellIdx];
+        set({
+          hexaCore: s.hexaCore - price,
+          unlockedCorners: nextUnlocked,
+          ...resolveGameEndState(s.cells, s.hasUsedLastChance),
+        });
+        return { ok: true };
+      },
+
+      giveUpLastChance: () => {
+        set({ lastChancePending: false, gameOver: true, lastChanceRemoveEvent: null });
+      },
+
+      applyLastChance: () => {
+        const s = get();
+        if (s.hasUsedLastChance || !s.lastChancePending) return { ok: false };
+        const unlocked = s.unlockedCorners ?? [];
+        const candidates = [];
+        let minVal = Infinity;
+        for (let i = 0; i < s.cells.length; i++) {
+          if (isCornerPlayBlocked(i, unlocked)) continue;
+          const c = s.cells[i];
+          if (!c || typeof c.value !== 'number' || !isFinite(c.value)) continue;
+          if (c.value < minVal) {
+            minVal = c.value;
+            candidates.length = 0;
+            candidates.push(i);
+          } else if (c.value === minVal) {
+            candidates.push(i);
+          }
+        }
+        if (!candidates.length) {
+          set({ lastChancePending: false, gameOver: true });
+          return { ok: false };
+        }
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        const newCells = [...s.cells];
+        newCells[pick] = null;
+        unstable_batchedUpdates(() => {
+          set({
+            cells: newCells,
+            hasUsedLastChance: true,
+            lastChancePending: false,
+            gameOver: false,
+            lastChanceRemoveEvent: { cellIdx: pick, value: minVal, id: Date.now() },
+          });
+        });
+        return { ok: true, removedAt: pick, value: minVal };
+      },
+
       // Seçili parçayı rastgele boş hücreye yerleştirir
       buyNode: () => {
-        const { cells, nextPieces, selectedPieceIdx } = get();
-        const empty = cells.reduce((a, c, i) => (c === null ? [...a, i] : a), []);
+        const { cells, nextPieces, selectedPieceIdx, unlockedCorners } = get();
+        const empty = cells.reduce((a, c, i) => (
+          c === null && !isCornerPlayBlocked(i, unlockedCorners) ? [...a, i] : a
+        ), []);
         if (!empty.length) return false;
         const pieceIdx = selectedPieceIdx ?? 0;
         const valueToPlace = nextPieces[pieceIdx];
@@ -565,13 +744,13 @@ const useStore = create(
         placed[idx] = { value: valueToPlace };
         const cr = runChainMerge(placed, idx);
         const newPieces = [...nextPieces];
-        newPieces[pieceIdx] = pickNextValue();
+        newPieces[pieceIdx] = pickNextSpawnValue(cr.cells);
         const score = mergeScoreFromSteps(cr.steps);
         set((s) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          ...resolveGameEndState(cr.cells, s.hasUsedLastChance),
           ...(score > 0 ? {
             credits: s.credits + score,
             highScore: Math.max(s.highScore ?? 0, s.credits + score),
@@ -585,21 +764,21 @@ const useStore = create(
 
       // Seçili parçayı belirli bir boş hücreye yerleştirir
       spawnAtCell: (cellIdx) => {
-        const { cells, nextPieces, selectedPieceIdx } = get();
-        if (cells[cellIdx] !== null) return false;
+        const { cells, nextPieces, selectedPieceIdx, unlockedCorners } = get();
+        if (cells[cellIdx] !== null || isCornerPlayBlocked(cellIdx, unlockedCorners)) return false;
         const pieceIdx = selectedPieceIdx ?? 0;
         const valueToPlace = nextPieces[pieceIdx];
         const placed = [...cells];
         placed[cellIdx] = { value: valueToPlace };
         const cr = runChainMerge(placed, cellIdx);
         const newPieces = [...nextPieces];
-        newPieces[pieceIdx] = pickNextValue();
+        newPieces[pieceIdx] = pickNextSpawnValue(cr.cells);
         const score = mergeScoreFromSteps(cr.steps);
         set((s) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          ...resolveGameEndState(cr.cells, s.hasUsedLastChance),
           ...(score > 0 ? {
             credits: s.credits + score,
             highScore: Math.max(s.highScore ?? 0, s.credits + score),
@@ -617,7 +796,7 @@ const useStore = create(
       // Birleşme yalnızca boş hücreye konulan taşın komşu etkileşimiyle tetiklenir.
       spawnFromPreview: (pieceIdx, cellIdx) => {
         const s = get();
-        if (s.lockedCells[cellIdx]) return { ok: false, locked: true };
+        if (s.lockedCells[cellIdx] || isCornerPlayBlocked(cellIdx, s.unlockedCorners)) return { ok: false, locked: true };
         const existing = s.cells[cellIdx];
 
         // Dolu hücreye bırakma her koşulda yasak — taş geri döner
@@ -627,20 +806,20 @@ const useStore = create(
 
         const snap = makeSnap(s);
         const valueToPlace = s.nextPieces[pieceIdx];
-        const newPieces = [...s.nextPieces];
-        newPieces[pieceIdx] = pickNextValue();
         const working = [...s.cells];
 
         // Boş hücre → normal yerleştir
         working[cellIdx] = { value: valueToPlace };
         const cr = runChainMerge(working, cellIdx);
+        const newPieces = [...s.nextPieces];
+        newPieces[pieceIdx] = pickNextSpawnValue(cr.cells);
         const newMaxNode_e = cr.cells.reduce((mx, c) => Math.max(mx, c?.value ?? 0), 0);
         const score_e = mergeScoreFromSteps(cr.steps);
         set((st) => ({
           cells: cr.cells,
           nextPieces: newPieces,
           selectedPieceIdx: pieceIdx === 0 ? 1 : 0,
-          gameOver: checkGameOver(cr.cells),
+          ...resolveGameEndState(cr.cells, st.hasUsedLastChance),
           lockedCells: decrementLocks(s.lockedCells),
           previousState: snap,
           maxNode: Math.max(s.maxNode ?? 0, newMaxNode_e),
@@ -666,8 +845,12 @@ const useStore = create(
         const src = cells[fromIdx];
         const dst = cells[toIdx];
         if (!src) return { result: 'snap' };
-        // Kilitli hücrelere dokunma yasak
-        if (lockedCells[fromIdx] || lockedCells[toIdx]) return { result: 'snap' };
+        // Yapısal kilit + geçici kilit kontrolü
+        const { unlockedCorners } = s;
+        if (lockedCells[fromIdx] || lockedCells[toIdx] ||
+          isCornerPlayBlocked(fromIdx, unlockedCorners) || isCornerPlayBlocked(toIdx, unlockedCorners)) {
+          return { result: 'snap' };
+        }
 
         // Boş hücreye bırakma artık yasak — taş yerine geri döner
         if (!dst) return { result: 'snap' };
@@ -688,7 +871,7 @@ const useStore = create(
           const score_rd = mergeScoreFromSteps(allSteps);
           set((st) => ({
             cells: cr.cells,
-            gameOver: checkGameOver(cr.cells),
+            ...resolveGameEndState(cr.cells, st.hasUsedLastChance),
             lockedCells: decrementLocks(lockedCells),
             previousState: snap,
             ...(score_rd > 0 ? {
@@ -719,7 +902,7 @@ const useStore = create(
         const score_sw = mergeScoreFromSteps(allSteps);
         set((st) => ({
           cells: chain2.cells,
-          gameOver: checkGameOver(chain2.cells),
+          ...resolveGameEndState(chain2.cells, st.hasUsedLastChance),
           lockedCells: decrementLocks(lockedCells),
           previousState: snap,
           ...(score_sw > 0 ? {
@@ -760,7 +943,7 @@ const useStore = create(
           lockedCells: { ...s.lockedCells, [cellIdx]: 3 },
           previousState: snap,
           activePowerUp: null,
-          gameOver: checkGameOver(newCells),
+          ...resolveGameEndState(newCells, s.hasUsedLastChance),
           lastChainEvent: null,
         });
         return { ok: true };
@@ -806,7 +989,7 @@ const useStore = create(
           previousState: snap,
           activePowerUp: null,
           wormholeFirstIdx: null,
-          gameOver: checkGameOver(chain2.cells),
+          ...resolveGameEndState(chain2.cells, st.hasUsedLastChance),
           ...(score_wh > 0 ? {
             credits: st.credits + score_wh,
             highScore: Math.max(st.highScore ?? 0, st.credits + score_wh),
@@ -839,7 +1022,7 @@ const useStore = create(
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(cr.cells),
+            ...resolveGameEndState(cr.cells, st.hasUsedLastChance),
             maxNode: Math.max(s.maxNode ?? 0, newMaxNode_ol),
             ...(score_ol > 0 ? {
               credits: st.credits + score_ol,
@@ -861,7 +1044,7 @@ const useStore = create(
             lockedCells: decrementLocks(s.lockedCells),
             previousState: snap,
             activePowerUp: null,
-            gameOver: checkGameOver(exploded),
+            ...resolveGameEndState(exploded, s.hasUsedLastChance),
             lastChainEvent: null,
             lastOverloadEvent: { cellIdx, exploded: true, id },
           });
@@ -885,7 +1068,9 @@ const useStore = create(
           wormholeFirstIdx: null,
           lastChainEvent: null,
           lastOverloadEvent: null,
+          lastChanceRemoveEvent: null,
           gameOver: false,
+          lastChancePending: false,
         });
         return { ok: true };
       },
@@ -901,22 +1086,27 @@ const useStore = create(
           const v = c?.value;
           return (typeof v === 'number' && isFinite(v)) ? Math.max(mx, v) : mx;
         }, 0);
+        const fresh = createNewGameState(get().unlockedCorners);
         set((s) => ({
           hexaCore: s.hexaCore + earned,
-          // maxNode'u son kez güncelle (highScore addCredits/tickIncome ile zaten güncellendi)
+          // maxNode'u son kez güncelle (highScore birleşme skorlarıyla zaten güncellendi)
           maxNode: Math.max(s.maxNode ?? 0, finalMaxNode),
-          cells: Array(ROWS * COLS).fill(null),
+          cells: fresh.cells,
           credits: startCredits,
-          uretMaliyeti: 10,
-          nextPieces: [pickNextValue(true), pickNextValue(true)],
+          nextPieces: fresh.nextPieces,
           selectedPieceIdx: 0,
           gameOver: false,
+          lastChancePending: false,
+          hasUsedLastChance: false,
+          dragTutorialDismissed: false,
           activePowerUp: null,
           wormholeFirstIdx: null,
           lockedCells: {},
           undoCostIdx: 0,
           previousState: null,
+          lastChainEvent: null,   // hayalet animasyon flash'ını önler
           lastOverloadEvent: null,
+          lastChanceRemoveEvent: null,
         }));
       },
 
@@ -937,19 +1127,24 @@ const useStore = create(
       },
 
       resetGame: () => {
+        const fresh = createNewGameState(get().unlockedCorners);
         set({
-          cells: Array(ROWS * COLS).fill(null),
+          cells: fresh.cells,
           credits: 0,
-          uretMaliyeti: 10,
-          nextPieces: [pickNextValue(true), pickNextValue(true)],
+          nextPieces: fresh.nextPieces,
           selectedPieceIdx: 0,
           gameOver: false,
+          lastChancePending: false,
+          hasUsedLastChance: false,
+          dragTutorialDismissed: false,
           activePowerUp: null,
           wormholeFirstIdx: null,
           lockedCells: {},
           undoCostIdx: 0,
           previousState: null,
+          lastChainEvent: null,   // hayalet animasyon flash'ını önler
           lastOverloadEvent: null,
+          lastChanceRemoveEvent: null,
         });
       },
     }),
@@ -965,6 +1160,7 @@ const useStore = create(
         highScore: s.highScore,
         maxNode: s.maxNode,
         maxCombo: s.maxCombo,
+        unlockedCorners: s.unlockedCorners,
         // Oyun ilerleme durumu — kaldığın yerden devam
         cells: s.cells,
         credits: s.credits,
@@ -983,6 +1179,10 @@ const useStore = create(
             previousState: null,
             lastChainEvent: null,
             lastOverloadEvent: null,
+            lastChanceRemoveEvent: null,
+            lastChancePending: false,
+            hasUsedLastChance: false,
+            dragTutorialDismissed: false,
             currentScreen: 'MENU',
             labOpen: false,
           };
@@ -994,16 +1194,25 @@ const useStore = create(
             state.gameOver !== true;
 
           if (hasSavedGame) {
-            // Geçerli tahta var → sadece geçici alanları sıfırla
-            useStore.setState(transientReset);
-          } else {
-            // Kayıt yok / bozuk / oyun bitmişti → temiz başlangıç
+            // Geçerli tahta var → geçici alanları sıfırla; dock'ta kalan eski 16/32 vb. temizle
             useStore.setState({
               ...transientReset,
-              cells: Array(ROWS * COLS).fill(null),
+              nextPieces: sanitizeNextPieces(state.nextPieces, state.cells),
+            });
+            const cur = useStore.getState();
+            const endState = resolveGameEndState(cur.cells, cur.hasUsedLastChance);
+            if (endState.lastChancePending || endState.gameOver) {
+              useStore.setState(endState);
+            }
+          } else {
+            // Kayıt yok / bozuk / oyun bitmişti → kısıtlı rastgele başlangıç taşları
+            const unlocked = Array.isArray(state?.unlockedCorners) ? state.unlockedCorners : [];
+            const fresh = createNewGameState(unlocked);
+            useStore.setState({
+              ...transientReset,
+              cells: fresh.cells,
               credits: 0,
-              uretMaliyeti: 10,
-              nextPieces: [pickNextValue(true), pickNextValue(true)],
+              nextPieces: fresh.nextPieces,
               selectedPieceIdx: 0,
               gameOver: false,
             });
@@ -1015,6 +1224,16 @@ const useStore = create(
             if (typeof state.maxNode !== 'number' || !isFinite(state.maxNode)) fixes.maxNode = 0;
             if (typeof state.maxCombo !== 'number' || !isFinite(state.maxCombo)) fixes.maxCombo = 0;
             if (typeof state.hexaCore !== 'number' || !isFinite(state.hexaCore)) fixes.hexaCore = 0;
+            if (!Array.isArray(state.unlockedCorners)) {
+              fixes.unlockedCorners = [];
+            } else {
+              const validCorners = state.unlockedCorners.filter(
+                (i) => typeof i === 'number' && LOCKED_CELL_INDICES.has(i)
+              );
+              if (validCorners.length !== state.unlockedCorners.length) {
+                fixes.unlockedCorners = validCorners;
+              }
+            }
             if (Object.keys(fixes).length > 0) useStore.setState(fixes);
           }
         }, 0);
@@ -1090,44 +1309,334 @@ function FloatingText({ x, y, text, onDone, textStyle }) {
   );
 }
 
-// ── NodeHex — SVG hex görsel ───────────────────────────────────────────────────
-const NodeHex = React.memo(function NodeHex({ value }) {
+// AnimatedPolygon — SVG Polygon'u Animated ile sarmalar (nefes efekti için)
+const AnimatedPolygon = Animated.createAnimatedComponent(Polygon);
+
+// ── Nefes Animasyonu Küresel Kontrolü ─────────────────────────────────────────
+// Kombo/birleşme sırasında tüm taşların JS-thread nefes animasyonları duraklatılır.
+// Bu sayede useNativeDriver:false yükü kombo anında sıfıra iner.
+const _breatheRegistry = new Set(); // { stop, restart } nesneleri
+let _breathingPaused = false;
+
+function pauseAllBreathing() {
+  if (_breathingPaused) return;
+  _breathingPaused = true;
+  _breatheRegistry.forEach(({ stop }) => { try { stop(); } catch (_e) { } });
+}
+
+function resumeAllBreathing() {
+  if (!_breathingPaused) return;
+  _breathingPaused = false;
+  _breatheRegistry.forEach(({ restart }) => { try { restart(); } catch (_e) { } });
+}
+
+// ── LiteNode — uçan/zincir VFX için tek katmanlı hafif hex (gradyan yok) ─────
+const LiteNode = React.memo(function LiteNode({ value }) {
   const safeVal = (value && typeof value === 'number' && !isNaN(value)) ? value : 2;
-  const fill = nodeColor(safeVal);
+  const baseFill = nodeColor(safeVal);
   const stroke = nodeStrokeColor(safeVal);
   const ncx = HEX_W / 2;
   const ncy = HEX_R;
   const label = formatNum(safeVal);
-  // Karakter bazlı font boyutu — 1 ve 2 basamak ayrı tutulur, geçişler yumuşak
-  const fs = label.length === 1 ? Math.round(HEX_R * 0.52)
-    : label.length === 2 ? Math.round(HEX_R * 0.45)
-      : label.length === 3 ? Math.round(HEX_R * 0.39)
-        : label.length === 4 ? Math.round(HEX_R * 0.34)
-          : label.length === 5 ? Math.round(HEX_R * 0.28)
-            : Math.round(HEX_R * 0.24); // 6+ karakter (100K, 1M vb.)
+  const fs = nodeLabelFontSize(label, HEX_R);
 
   return (
-    <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
-      {/* İç dolgu */}
-      <Polygon
-        points={hexPoints(ncx, ncy, DRAW_R)}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={STROKE_W * 1.6}
-        strokeLinejoin="miter"
-      />
-      {/* Değer etiketi */}
-      <SvgText
-        x={ncx} y={ncy + fs * 0.37}
-        textAnchor="middle"
-        fontSize={fs}
-        fill={C.nodeText}
-        fontWeight="bold"
-      >
-        {label}
-      </SvgText>
-    </Svg>
+    <View style={{ width: HEX_W, height: HEX_H }}>
+      <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
+        <Polygon
+          points={hexPoints(ncx, ncy, DRAW_R)}
+          fill={baseFill}
+          stroke={stroke}
+          strokeWidth={STROKE_W * 1.6}
+          strokeLinejoin="miter"
+        />
+      </Svg>
+      <View pointerEvents="none" style={styles.hexLabelOverlay}>
+        <Text style={[hexLabelTextStyle, { fontSize: fs }]}>{label}</Text>
+      </View>
+    </View>
   );
+});
+
+// ── NodeHex — Premium materyal dokusu ile SVG hex görsel ─────────────────────
+// tier 0 = metal (2-8) | tier 1 = taş (16-64) | tier 2 = mücevher (128+)
+// Sayı etiketi SVG dışında RN Text — scale animasyonunda piksellenme azalır.
+const NodeHex = React.memo(function NodeHex({ value }) {
+  const safeVal = (value && typeof value === 'number' && !isNaN(value)) ? value : 2;
+  const baseFill = nodeColor(safeVal);
+  const stroke = nodeStrokeColor(safeVal);
+  const ncx = HEX_W / 2;
+  const ncy = HEX_R;
+  const label = formatNum(safeVal);
+  const fs = nodeLabelFontSize(label, HEX_R);
+
+  const log2v = Math.floor(Math.log2(safeVal));
+  // 0=metal(2-8), 1=taş(16-64), 2=mücevher(128+)
+  const tier = log2v >= 7 ? 2 : log2v >= 4 ? 1 : 0;
+
+  // Nefes animasyonu — her taş rastgele bir fazdan başlar
+  const breathe = useRef(new Animated.Value(0)).current;
+  const phaseDelay = useRef(Math.floor(Math.random() * 3200)).current;
+  useEffect(() => {
+    let loopAnim = null;
+
+    function startLoop() {
+      if (_breathingPaused) return;
+      loopAnim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(breathe, {
+            toValue: 1, duration: 2600,
+            easing: Easing.inOut(Easing.sin), useNativeDriver: false,
+          }),
+          Animated.timing(breathe, {
+            toValue: 0, duration: 2600,
+            easing: Easing.inOut(Easing.sin), useNativeDriver: false,
+          }),
+        ])
+      );
+      loopAnim.start();
+    }
+
+    function stopLoop() {
+      loopAnim?.stop();
+      loopAnim = null;
+    }
+
+    const entry = { stop: stopLoop, restart: startLoop };
+    _breatheRegistry.add(entry);
+
+    const t = setTimeout(startLoop, phaseDelay);
+
+    return () => {
+      clearTimeout(t);
+      stopLoop();
+      _breatheRegistry.delete(entry);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const auraOpacity = breathe.interpolate({
+    inputRange: [0, 1],
+    outputRange: [tier === 2 ? 0.06 : 0.04, tier === 2 ? 0.28 : 0.18],
+  });
+
+  // Gradyan yönü: metal çapraz, diğerleri dikey
+  const [gx1, gy1, gx2, gy2] = tier === 0
+    ? [0, 0, HEX_W, HEX_H]
+    : [ncx, 0, ncx, HEX_H];
+
+  // Stop listesi tier'a göre
+  const stops = tier === 0
+    ? [
+      { off: '0%', color: stroke, op: 0.65 },
+      { off: '28%', color: stroke, op: 0.22 },
+      { off: '60%', color: baseFill, op: 0.94 },
+      { off: '100%', color: '#020008', op: 0.98 },
+    ]
+    : tier === 1
+      ? [
+        { off: '0%', color: '#ffffff', op: 0.18 },
+        { off: '22%', color: stroke, op: 0.68 },
+        { off: '58%', color: baseFill, op: 0.90 },
+        { off: '100%', color: '#010006', op: 0.99 },
+      ]
+      : [
+        { off: '0%', color: '#ffffff', op: 0.28 },
+        { off: '16%', color: stroke, op: 0.82 },
+        { off: '40%', color: stroke, op: 0.32 },
+        { off: '72%', color: baseFill, op: 0.88 },
+        { off: '100%', color: '#010005', op: 0.99 },
+      ];
+
+  return (
+    <View style={{ width: HEX_W, height: HEX_H }}>
+      <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`} overflow="hidden">
+        <Defs>
+          <SvgLinearGradient
+            id="mg"
+            x1={gx1} y1={gy1} x2={gx2} y2={gy2}
+            gradientUnits="userSpaceOnUse"
+          >
+            {stops.map((s, i) => (
+              <SvgStop key={i} offset={s.off} stopColor={s.color} stopOpacity={s.op} />
+            ))}
+          </SvgLinearGradient>
+        </Defs>
+
+        {/* Dış aura — nefes animasyonu ile titreşen ışıma */}
+        <AnimatedPolygon
+          points={hexPoints(ncx, ncy, DRAW_R * 1.22)}
+          fill={`${stroke}09`}
+          stroke={stroke}
+          strokeWidth={3}
+          opacity={auraOpacity}
+        />
+
+        {/* Ana materyal dolgu */}
+        <Polygon
+          points={hexPoints(ncx, ncy, DRAW_R)}
+          fill="url(#mg)"
+          stroke={stroke}
+          strokeWidth={tier === 2 ? 2.2 : STROKE_W * 1.6}
+          strokeLinejoin="miter"
+        />
+
+        {/* Orta facet ring — derinlik hissi */}
+        <Polygon
+          points={hexPoints(ncx, ncy, DRAW_R * 0.78)}
+          fill="none"
+          stroke={`${stroke}38`}
+          strokeWidth={tier === 2 ? 1.4 : 0.9}
+        />
+
+        {/* Mücevher: ekstra iç facet + merkez parlaması */}
+        {tier === 2 && (
+          <>
+            <Polygon
+              points={hexPoints(ncx, ncy, DRAW_R * 0.50)}
+              fill={`${stroke}14`}
+              stroke={`${stroke}48`}
+              strokeWidth={0.9}
+            />
+            <Polygon
+              points={hexPoints(ncx, ncy, DRAW_R * 0.28)}
+              fill={`${stroke}18`}
+              stroke="none"
+            />
+          </>
+        )}
+
+        {/* Üst köşe ışık yansıması — cam/taş highlight */}
+        <Polygon
+          points={hexPoints(ncx, ncy - DRAW_R * 0.30, DRAW_R * (tier === 2 ? 0.28 : 0.18))}
+          fill={`${stroke}${tier === 2 ? '1e' : '12'}`}
+          stroke="none"
+        />
+      </Svg>
+      <View pointerEvents="none" style={styles.hexLabelOverlay}>
+        <Text style={[hexLabelTextStyle, { fontSize: fs, opacity: tier === 2 ? 0.97 : 0.92 }]}>
+          {label}
+        </Text>
+      </View>
+    </View>
+  );
+});
+
+// Son Şans — silinen taşın hücresinde kısa vurgu (taş kaldırıldı, ghost + halka)
+function LastChanceEraseFlash({ cellIdx, value, onDone }) {
+  const { cx, cy } = CELLS[cellIdx] ?? { cx: 0, cy: 0 };
+  const ringOpacity = useRef(new Animated.Value(0)).current;
+  const ringScale = useRef(new Animated.Value(0.85)).current;
+  const nodeOpacity = useRef(new Animated.Value(1)).current;
+  const nodeScale = useRef(new Animated.Value(1)).current;
+  const labelOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.sequence([
+        Animated.timing(ringOpacity, { toValue: 1, duration: 120, useNativeDriver: false }),
+        Animated.timing(ringOpacity, { toValue: 0, duration: 520, useNativeDriver: false }),
+      ]),
+      Animated.sequence([
+        Animated.timing(ringScale, { toValue: 1.22, duration: 280, useNativeDriver: false }),
+        Animated.timing(ringScale, { toValue: 1.45, duration: 360, useNativeDriver: false }),
+      ]),
+      Animated.sequence([
+        Animated.delay(80),
+        Animated.timing(nodeOpacity, { toValue: 0, duration: 420, useNativeDriver: false }),
+        Animated.timing(nodeScale, { toValue: 0.55, duration: 420, useNativeDriver: false }),
+      ]),
+      Animated.sequence([
+        Animated.timing(labelOpacity, { toValue: 1, duration: 150, useNativeDriver: false }),
+        Animated.delay(280),
+        Animated.timing(labelOpacity, { toValue: 0, duration: 350, useNativeDriver: false }),
+      ]),
+    ]).start(({ finished }) => {
+      if (finished && onDone) onDone();
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.nodeAbs,
+          {
+            left: cx - HEX_W / 2,
+            top: cy - HEX_R,
+            width: HEX_W,
+            height: HEX_H,
+            zIndex: 180,
+            opacity: ringOpacity,
+            transform: [{ scale: ringScale }],
+          },
+        ]}
+      >
+        <Svg width={HEX_W} height={HEX_H} viewBox={`0 0 ${HEX_W} ${HEX_H}`}>
+          <Polygon
+            points={hexPoints(HEX_W / 2, HEX_R, DRAW_R + 8)}
+            fill="rgba(0,255,224,0.12)"
+            stroke={COLOR_NEON_CYAN}
+            strokeWidth={3}
+            strokeLinejoin="miter"
+          />
+          <Polygon
+            points={hexPoints(HEX_W / 2, HEX_R, DRAW_R + 14)}
+            fill="none"
+            stroke="#ff6688"
+            strokeWidth={1.5}
+            strokeLinejoin="miter"
+            opacity={0.7}
+          />
+        </Svg>
+      </Animated.View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.nodeAbs,
+          {
+            left: cx - HEX_W / 2,
+            top: cy - HEX_R,
+            width: HEX_W,
+            height: HEX_H,
+            zIndex: 181,
+            opacity: nodeOpacity,
+            transform: [{ scale: nodeScale }],
+          },
+        ]}
+      >
+        <LiteNode value={value} />
+      </Animated.View>
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.nodeAbs,
+          {
+            left: cx - 52,
+            top: cy - HEX_R * 0.2,
+            width: 104,
+            alignItems: 'center',
+            zIndex: 182,
+            opacity: labelOpacity,
+          },
+        ]}
+      >
+        <Text style={lcFlashStyles.label}>SİLİNDİ</Text>
+      </Animated.View>
+    </>
+  );
+}
+
+const lcFlashStyles = StyleSheet.create({
+  label: {
+    color: COLOR_NEON_CYAN,
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '700',
+    letterSpacing: 3,
+    textShadowColor: 'rgba(0,255,224,0.9)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 8,
+  },
 });
 
 // ── GhostPiece — sürükleme sırasında parmağın üzerinde yüzen taş ─────────────
@@ -1213,7 +1722,7 @@ const GhostPiece = React.forwardRef(function GhostPiece(_, ref) {
 
   return (
     <>
-      {/* ── Trail katmanı: SADECE hareket sırasında belirir, ana taşı gecikmeli izler ── */}
+      {/* ── Trail: LiteNode + düşük opacity (ağır SVG/glow yok) ── */}
       <Animated.View
         pointerEvents="none"
         style={{
@@ -1232,25 +1741,10 @@ const GhostPiece = React.forwardRef(function GhostPiece(_, ref) {
           ],
         }}
       >
-        <View
-          pointerEvents="none"
-          style={{
-            ...StyleSheet.absoluteFillObject,
-            backgroundColor: glowColor,
-            opacity: Platform.OS === 'android' ? 0.18 : 0.10,
-            borderRadius: HEX_R * 0.55,
-            ...(Platform.OS === 'ios' ? {
-              shadowColor: glowColor,
-              shadowOffset: { width: 0, height: 0 },
-              shadowRadius: 18,
-              shadowOpacity: 0.9,
-            } : { elevation: 14 }),
-          }}
-        />
-        <NodeHex value={displayValue} />
+        <LiteNode value={displayValue} />
       </Animated.View>
 
-      {/* ── Ana ghost taşı: parmağı 1:1 takip eder, neon glow halkasıyla ── */}
+      {/* ── Ana ghost: LiteNode, parmağı 1:1 takip eder ── */}
       <Animated.View
         pointerEvents="none"
         style={{
@@ -1270,7 +1764,7 @@ const GhostPiece = React.forwardRef(function GhostPiece(_, ref) {
           ...iosShadow,
         }}
       >
-        <NodeHex value={displayValue} />
+        <LiteNode value={displayValue} />
       </Animated.View>
     </>
   );
@@ -1466,13 +1960,332 @@ const ADMOB_INTERSTITIAL_ID = 'ca-app-pub-9735467121072758/1402610997';
 
 let InterstitialAd = null;
 let AdEventType = null;
+// Son Şans ödüllü reklam — TestIds.REWARDED (production ID sonra manuel)
+let RewardedAd = null;
+let RewardedAdEventType = null;
+let TestIds = null;
+let rewardedAd = null;
+
 if (!_isExpoGo) {
   try {
     const admob = require('react-native-google-mobile-ads');
     InterstitialAd = admob.InterstitialAd;
     AdEventType = admob.AdEventType;
+    RewardedAd = admob.RewardedAd;
+    RewardedAdEventType = admob.RewardedAdEventType;
+    TestIds = admob.TestIds;
+    if (RewardedAd && TestIds?.REWARDED) {
+      rewardedAd = RewardedAd.createForAdRequest(TestIds.REWARDED, {
+        requestNonPersonalizedAdsOnly: false,
+      });
+    }
   } catch (_) { }
 }
+
+// Ödüllü reklam ön yükleme + güvenli gösterim (AppInner mount)
+function useLastChanceRewardedAd() {
+  const [isRewardedAdLoaded, setIsRewardedAdLoaded] = useState(false);
+  const earnedRef = useRef(null);
+  const failRef = useRef(null);
+
+  const loadRewarded = useCallback(() => {
+    if (_isExpoGo || !rewardedAd) return;
+    try {
+      setIsRewardedAdLoaded(false);
+      rewardedAd.load();
+    } catch (_) {
+      setIsRewardedAdLoaded(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (_isExpoGo || !rewardedAd || !RewardedAdEventType) return;
+
+    const unsubs = [];
+
+    unsubs.push(
+      rewardedAd.addAdEventListener(RewardedAdEventType.LOADED, () => {
+        setIsRewardedAdLoaded(true);
+      })
+    );
+
+    unsubs.push(
+      rewardedAd.addAdEventListener(RewardedAdEventType.EARNED_REWARD, () => {
+        const cb = earnedRef.current;
+        earnedRef.current = null;
+        failRef.current = null;
+        if (cb) cb();
+      })
+    );
+
+    unsubs.push(
+      rewardedAd.addAdEventListener(RewardedAdEventType.CLOSED, () => {
+        setIsRewardedAdLoaded(false);
+        if (earnedRef.current) {
+          const fail = failRef.current;
+          earnedRef.current = null;
+          failRef.current = null;
+          if (fail) fail();
+        }
+        loadRewarded();
+      })
+    );
+
+    if (AdEventType?.ERROR) {
+      unsubs.push(
+        rewardedAd.addAdEventListener(AdEventType.ERROR, () => {
+          setIsRewardedAdLoaded(false);
+          if (earnedRef.current) {
+            const fail = failRef.current;
+            earnedRef.current = null;
+            failRef.current = null;
+            if (fail) fail();
+          }
+          loadRewarded();
+        })
+      );
+    }
+
+    loadRewarded();
+
+    return () => {
+      unsubs.forEach((u) => { try { u(); } catch (_e) { /* noop */ } });
+    };
+  }, [loadRewarded]);
+
+  const showLastChanceRewarded = useCallback((onReward, onFail) => {
+    if (typeof onReward !== 'function') return;
+
+    // Expo Go / native modül yok → gerçek reklam yükleme yok, mock ödül
+    if (_isExpoGo || !rewardedAd) {
+      setTimeout(() => {
+        try { onReward(); } catch (_) { if (onFail) onFail(); }
+      }, 480);
+      return;
+    }
+
+    try {
+      if (!isRewardedAdLoaded) {
+        if (onFail) onFail();
+        return;
+      }
+      earnedRef.current = onReward;
+      failRef.current = onFail ?? null;
+      rewardedAd.show();
+    } catch (_) {
+      earnedRef.current = null;
+      failRef.current = null;
+      if (onFail) onFail();
+      loadRewarded();
+    }
+  }, [isRewardedAdLoaded, loadRewarded]);
+
+  return { isRewardedAdLoaded, showLastChanceRewarded };
+}
+
+// ── LastChanceModal — Son Şans (tahta dolunca) ────────────────────────────────
+function LastChanceModal({ visible, isRewardedAdLoaded, showLastChanceRewarded }) {
+  const giveUpLastChance = useStore((s) => s.giveUpLastChance);
+  const applyLastChance = useStore((s) => s.applyLastChance);
+  const [rewardLoading, setRewardLoading] = useState(false);
+  const canShowRewardedAd = _isExpoGo || isRewardedAdLoaded;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      slideAnim.setValue(50);
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 18, bounciness: 6, useNativeDriver: true }),
+      ]).start();
+    } else {
+      setRewardLoading(false);
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 50, duration: 180, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleGiveUp = useCallback(() => {
+    playSound('click');
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light);
+    giveUpLastChance();
+  }, [giveUpLastChance]);
+
+  const handleAdFail = useCallback(() => {
+    setRewardLoading(false);
+    safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
+    Alert.alert(
+      'Reklam yüklenemedi',
+      'Reklam yüklenemedi, sistem kurtarılamadı.',
+      [{ text: 'Tamam', onPress: () => giveUpLastChance() }],
+    );
+  }, [giveUpLastChance]);
+
+  const handleSave = useCallback(() => {
+    if (rewardLoading) return;
+    playSound('click');
+    safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+    setRewardLoading(true);
+    try {
+      showLastChanceRewarded(
+        () => {
+          const res = applyLastChance();
+          setRewardLoading(false);
+          if (res?.ok) {
+            playSound('spawn');
+            safeHaptic.notification(Haptics.NotificationFeedbackType.Success);
+          } else {
+            safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
+          }
+        },
+        handleAdFail,
+      );
+    } catch (_) {
+      handleAdFail();
+    }
+  }, [rewardLoading, applyLastChance, showLastChanceRewarded, handleAdFail]);
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={handleGiveUp}>
+      <Animated.View style={[lcStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[lcStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+          <View style={lcStyles.iconRow}>
+            <OverloadIcon size={28} color={COLOR_NEON_CYAN} />
+          </View>
+
+          <Text style={lcStyles.title} adjustsFontSizeToFit numberOfLines={2}>
+            SİSTEM ÇÖKMEK ÜZERE!
+          </Text>
+
+          <Text style={lcStyles.message}>
+            Reklam izleyerek sahadaki en düşük değerli taşı yok et ve oyuna tutun.
+          </Text>
+
+          <View style={lcStyles.divider} />
+
+          <View style={lcStyles.btnRow}>
+            <TouchableOpacity
+              style={lcStyles.giveUpBtn}
+              onPress={handleGiveUp}
+              activeOpacity={0.82}
+              disabled={rewardLoading}
+            >
+              <Text style={lcStyles.giveUpTxt}>P E S   E T</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[lcStyles.saveBtn, (rewardLoading || !canShowRewardedAd) && lcStyles.saveBtnDim]}
+              onPress={handleSave}
+              activeOpacity={0.82}
+              disabled={rewardLoading || !canShowRewardedAd}
+            >
+              <Text style={lcStyles.saveTxt}>
+                {rewardLoading
+                  ? 'YÜKLENİYOR…'
+                  : !canShowRewardedAd
+                    ? 'REKLAM HAZIRLANIYOR…'
+                    : 'SİSTEMİ KURTAR'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const lcStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: C.modalOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: COLOR_MODAL_BG,
+    borderWidth: 1.5,
+    borderColor: COLOR_NEON_CYAN,
+    borderRadius: 20,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
+    alignItems: 'center',
+    elevation: 12,
+    shadowColor: COLOR_NEON_CYAN,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+  },
+  iconRow: {
+    marginBottom: Math.round(SCREEN_WIDTH * 0.03),
+  },
+  title: {
+    color: COLOR_NEON_CYAN,
+    fontSize: Math.round(SCREEN_WIDTH * 0.034),
+    fontWeight: '700',
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
+  },
+  message: {
+    color: '#aa88bb',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.052),
+    marginBottom: Math.round(SCREEN_WIDTH * 0.045),
+  },
+  divider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: 'rgba(0,255,224,0.22)',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: Math.round(SCREEN_WIDTH * 0.03),
+    width: '100%',
+  },
+  giveUpBtn: {
+    flex: 1,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a2a4a',
+    backgroundColor: C.btnBg,
+    alignItems: 'center',
+  },
+  giveUpTxt: {
+    color: '#887799',
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '400',
+    letterSpacing: 2,
+  },
+  saveBtn: {
+    flex: 1.55,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: COLOR_NEON_CYAN,
+    backgroundColor: 'rgba(0,180,160,0.18)',
+    alignItems: 'center',
+  },
+  saveBtnDim: {
+    opacity: 0.55,
+  },
+  saveTxt: {
+    color: COLOR_NEON_CYAN,
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '600',
+    letterSpacing: 1.5,
+  },
+});
 
 // ── GameOverModal ─────────────────────────────────────────────────────────────
 function GameOverModal({ visible, onOpenLab }) {
@@ -1984,7 +2797,7 @@ function DyingNode({ cellIdx, value, targetIdx, onDone, fullTravel = false }) {
         },
       ]}
     >
-      <NodeHex value={value} />
+      <LiteNode value={value} />
     </Animated.View>
   );
 }
@@ -2032,7 +2845,8 @@ function ExplosionNode({ cellIdx, onDone }) {
 function ExplosionLayer() {
   const lastOverloadEvent = useStore((s) => s.lastOverloadEvent);
   const [activeExplosions, setActiveExplosions] = useState([]);
-  const seenId = useRef(null);
+  // Mount anında mevcut event'i "görüldü" say → remount'ta patlama flash'ı olmaz
+  const seenId = useRef(useStore.getState().lastOverloadEvent?.id ?? null);
   useEffect(() => {
     if (!lastOverloadEvent || lastOverloadEvent.id === seenId.current) return;
     if (!lastOverloadEvent.exploded) return; // Başarılı yükseltme = farklı efekt
@@ -2059,7 +2873,9 @@ function DyingNodesLayer({ onMerge }) {
   const lastChainEvent = useStore((s) => s.lastChainEvent);
   const [dyingNodes, setDyingNodes] = useState([]);
   const [comboFloats, setComboFloats] = useState([]);
-  const lastIdRef = useRef(null);
+  // Mount anında store'daki mevcut event id'sini "zaten görüldü" olarak damgala.
+  // Reset sonrası remount'ta eski event yeniden tetiklenmez (ikinci savunma hattı).
+  const lastIdRef = useRef(useStore.getState().lastChainEvent?.id ?? null);
 
   useEffect(() => {
     if (!lastChainEvent || lastChainEvent.id === lastIdRef.current) return;
@@ -2070,9 +2886,16 @@ function DyingNodesLayer({ onMerge }) {
     if (!steps || steps.length === 0) return;
 
     const STEP_DELAY = 185; // ms — her adım arası gecikme
+    const timers = [];
+
+    // Kombo süresi boyunca tüm taşların nefes animasyonlarını durdur.
+    // Bu, useNativeDriver:false JS-thread yükünü kritik merge penceresinde sıfıra indirir.
+    pauseAllBreathing();
+    // Son adım + DyingNode bitişi (~270ms) + buffer → nefesi yeniden başlat
+    timers.push(setTimeout(resumeAllBreathing, (steps.length - 1) * STEP_DELAY + 500));
 
     steps.forEach((step, stepIdx) => {
-      setTimeout(() => {
+      timers.push(setTimeout(() => {
         // Bu adımın DyingNode'larını oluştur
         // fromIdx/toIdx: animasyonun nereden nereye gittiğini kesin olarak belirtir
         const batch = step.cleared
@@ -2084,33 +2907,45 @@ function DyingNodesLayer({ onMerge }) {
             value: item.value,
             fullTravel: step.travel === true,
           }));
-        if (batch.length > 0) {
-          setDyingNodes((prev) => [...prev, ...batch]);
-        }
 
-        // Bu adımın birleşme merkezine glow bildir
-        if (onMerge) onMerge(step.mergedAt);
+        // setDyingNodes + onMerge → tek render döngüsünde birleştir
+        unstable_batchedUpdates(() => {
+          if (batch.length > 0) {
+            setDyingNodes((prev) => [...prev, ...batch]);
+          }
+          // Bu adımın birleşme merkezine glow bildir
+          if (onMerge) onMerge(step.mergedAt);
+        });
 
         // Yükselen pitch ile merge sesi
         playMergeWithRate(Math.min(1.0 + stepIdx * 0.13, 1.65));
         safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
-      }, stepIdx * STEP_DELAY);
+      }, stepIdx * STEP_DELAY));
     });
 
     // ×N KOMBO yazısı — son adımdan 80ms sonra göster
     if (chainDepth >= 2) {
       const lastMergedAt = finalMergedAt ?? steps[steps.length - 1]?.mergedAt;
       if (lastMergedAt != null) {
-        setTimeout(() => {
+        timers.push(setTimeout(() => {
           const { cx, cy } = CELLS[lastMergedAt];
           setComboFloats((prev) => [
             ...prev,
             { id: `combo-${id}`, x: cx, y: cy, text: `×${chainDepth} KOMBO` },
           ]);
-        }, (steps.length - 1) * STEP_DELAY + 80);
+        }, (steps.length - 1) * STEP_DELAY + 80));
       }
     }
+
+    return () => {
+      timers.forEach(clearTimeout);
+      // Bileşen unmount veya event değişirse nefesi mutlaka geri aç
+      resumeAllBreathing();
+    };
   }, [lastChainEvent]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Unmount cleanup: kombo ortasında bileşen kaldırılırsa nefesi mutlaka geri aç
+  useEffect(() => () => resumeAllBreathing(), []);
 
   const removeDying = useCallback((nodeId) => {
     setDyingNodes((prev) => prev.filter((d) => d.id !== nodeId));
@@ -2149,15 +2984,21 @@ function DyingNodesLayer({ onMerge }) {
 // ── HexGrid ───────────────────────────────────────────────────────────────────
 const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
   const cells = useStore((s) => s.cells);
+  const unlockedCorners = useStore((s) => s.unlockedCorners) ?? [];
+  const hexaCore = useStore((s) => s.hexaCore);
   const activePowerUp = useStore((s) => s.activePowerUp);
   const wormholeFirstIdx = useStore((s) => s.wormholeFirstIdx);
   const lockedCells = useStore((s) => s.lockedCells);
   const applyBlackHole = useStore((s) => s.applyBlackHole);
   const applyWormhole = useStore((s) => s.applyWormhole);
   const applyOverload = useStore((s) => s.applyOverload);
+  const lastChanceRemoveEvent = useStore((s) => s.lastChanceRemoveEvent);
+  const clearLastChanceRemoveEvent = useStore((s) => s.clearLastChanceRemoveEvent);
 
   const [draggingIdx, setDraggingIdx] = useState(null);
   const [mergedCellIdx, setMergedCellIdx] = useState(null);
+  const [cornerModal, setCornerModal] = useState(null); // null | 'confirm' | 'noHC'
+  const pendingCornerIdxRef = useRef(null);
   const gridViewRef = useRef(null);
 
   const handleDragStart = useCallback((idx) => setDraggingIdx(idx), []);
@@ -2172,6 +3013,36 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
   }, [activePowerUp, applyBlackHole, applyWormhole, applyOverload]);
 
   const needsPowerTap = activePowerUp === 'blackhole' || activePowerUp === 'wormhole' || activePowerUp === 'overload';
+
+  const handleCornerUnlockPress = useCallback((cellIdx) => {
+    if (!isCornerPlayBlocked(cellIdx, unlockedCorners)) return;
+    pendingCornerIdxRef.current = cellIdx;
+    setCornerModal('confirm');
+  }, [unlockedCorners]);
+
+  const handleCornerUnlockConfirm = useCallback(() => {
+    const cellIdx = pendingCornerIdxRef.current;
+    if (cellIdx == null) {
+      setCornerModal(null);
+      return;
+    }
+    const res = useStore.getState().unlockCorner(cellIdx, CORNER_UNLOCK_COST);
+    if (res?.ok) {
+      playSound('upgrade');
+      safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+      pendingCornerIdxRef.current = null;
+      setCornerModal(null);
+    } else if (res?.noHC) {
+      setCornerModal('noHC');
+    } else {
+      setCornerModal(null);
+    }
+  }, []);
+
+  const handleCornerModalClose = useCallback(() => {
+    pendingCornerIdxRef.current = null;
+    setCornerModal(null);
+  }, []);
 
   // Yetenek vurgu pulse animasyonu — tüm hedef hücreler tek bir SVG'de, tek Value
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -2203,44 +3074,93 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
   }, [onGridMeasure]);
 
   return (
+    <>
     <View ref={gridViewRef} onLayout={measureGrid} style={{ width: SVG_W, height: SVG_H }}>
       <Svg
         width={SVG_W} height={SVG_H}
         viewBox={`0 0 ${SVG_W} ${SVG_H}`}
         style={StyleSheet.absoluteFill}
       >
-        {CELLS.map(({ cx, cy, id }) => (
-          <Polygon
-            key={`glow-${id}`}
-            points={hexPoints(cx, cy, DRAW_R + 4)}
-            fill={C.hexGlow}
-            stroke="none"
-            opacity={0.8}
-          />
-        ))}
-        {CELLS.map(({ cx, cy, id }) => (
-          <Polygon
-            key={id}
-            points={hexPoints(cx, cy, DRAW_R)}
-            fill={C.hexEmpty}
-            stroke={C.hexStroke}
-            strokeWidth={1.4}
-            strokeLinejoin="miter"
-            opacity={0.95}
-          />
-        ))}
-        {/* Preview drag aktifken boş hücreler hafifçe parlar */}
+        {/* Hücre tabanları — aktif hücreler açık, kilitliler daha koyu */}
+        {CELLS.map(({ cx, cy, id }, idx) => {
+          const isLocked = isCornerPlayBlocked(idx, unlockedCorners);
+          return (
+            <Polygon
+              key={id}
+              points={hexPoints(cx, cy, DRAW_R - 4)}
+              fill={isLocked ? 'rgba(8,4,26,0.88)' : 'rgba(255,255,255,0.03)'}
+              stroke={isLocked ? '#2a1850' : '#5533aa'}
+              strokeWidth={isLocked ? 0.8 : 1.1}
+              strokeLinejoin="round"
+              opacity={isLocked ? 0.95 : 0.80}
+            />
+          );
+        })}
+
+        {/* Kilitli köşe kilit ikonları — açılmamış köşeler */}
+        {CELLS.map(({ cx, cy }, idx) => {
+          if (!isCornerPlayBlocked(idx, unlockedCorners)) return null;
+          // Kilit bileşenleri: kelepçe + gövde + delik
+          const lx = cx;
+          const ly = cy + LOCK_S * 0.15; // hafif aşağı kaydır (görsel denge)
+          const shackleX = LOCK_S * 0.62;
+          const shackleTopY = ly - LOCK_S * 1.05;
+          const bodyTop = ly - LOCK_S * 0.18;
+          const shacklePath =
+            `M ${(lx - shackleX).toFixed(2)} ${bodyTop.toFixed(2)} ` +
+            `L ${(lx - shackleX).toFixed(2)} ${shackleTopY.toFixed(2)} ` +
+            `A ${shackleX.toFixed(2)} ${shackleX.toFixed(2)} 0 0 1 ` +
+            `${(lx + shackleX).toFixed(2)} ${shackleTopY.toFixed(2)} ` +
+            `L ${(lx + shackleX).toFixed(2)} ${bodyTop.toFixed(2)}`;
+          return (
+            <React.Fragment key={`lock-${idx}`}>
+              {/* Kelepçe (shackle) */}
+              <Path
+                d={shacklePath}
+                fill="none"
+                stroke={LOCK_SHACKLE}
+                strokeWidth={LOCK_S * 0.42}
+                strokeLinecap="round"
+                opacity={0.72}
+              />
+              {/* Kilit gövdesi */}
+              <SvgRect
+                x={lx - LOCK_S}
+                y={bodyTop}
+                width={LOCK_S * 2}
+                height={LOCK_S * 1.42}
+                rx={LOCK_S * 0.32}
+                fill={LOCK_FILL}
+                stroke={LOCK_STROKE}
+                strokeWidth={0.9}
+                opacity={0.88}
+              />
+              {/* Anahtar deliği */}
+              <SvgCircle
+                cx={lx}
+                cy={ly + LOCK_S * 0.52}
+                r={LOCK_S * 0.22}
+                fill={LOCK_STROKE}
+                opacity={0.80}
+              />
+            </React.Fragment>
+          );
+        })}
+
+        {/* Preview drag aktifken boş AKTİF hücreler soluk mor parlar */}
         {isDragActive && cells.map((cell, idx) => {
           if (cell !== null) return null;
+          if (isCornerPlayBlocked(idx, unlockedCorners)) return null;
           const { cx, cy } = CELLS[idx];
           return (
             <Polygon
               key={`hint-${idx}`}
-              points={hexPoints(cx, cy, DRAW_R - 1)}
-              fill="#2a1050"
-              stroke="#9944ff"
-              strokeWidth={1.5}
-              opacity={0.55}
+              points={hexPoints(cx, cy, DRAW_R - 4)}
+              fill="rgba(60,20,100,0.18)"
+              stroke="#7733cc"
+              strokeWidth={1.1}
+              strokeLinejoin="round"
+              opacity={0.70}
             />
           );
         })}
@@ -2260,6 +3180,26 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
         })()}
       </Svg>
 
+      {/* Kapalı köşelere dokun → HexaCore ile kalıcı aç */}
+      {[0, 3, 12, 15].map((idx) => {
+        if (!isCornerPlayBlocked(idx, unlockedCorners)) return null;
+        const { cx, cy } = CELLS[idx];
+        return (
+          <Pressable
+            key={`corner-unlock-${idx}`}
+            onPress={() => handleCornerUnlockPress(idx)}
+            style={{
+              position: 'absolute',
+              left: cx - HEX_W / 2,
+              top: cy - HEX_R,
+              width: HEX_W,
+              height: HEX_H,
+              zIndex: 45,
+            }}
+          />
+        );
+      })}
+
       {cells.map((cell, idx) =>
         cell ? (
           <DraggableNode
@@ -2274,6 +3214,15 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
             onMergedAtIdx={setMergedCellIdx}
           />
         ) : null
+      )}
+
+      {lastChanceRemoveEvent && (
+        <LastChanceEraseFlash
+          key={lastChanceRemoveEvent.id}
+          cellIdx={lastChanceRemoveEvent.cellIdx}
+          value={lastChanceRemoveEvent.value}
+          onDone={clearLastChanceRemoveEvent}
+        />
       )}
 
       {/* Yetenek pulse vurgusu — tek SVG katmanı, grid koordinatlarında altıgen */}
@@ -2339,14 +3288,52 @@ const HexGrid = React.memo(function HexGrid({ onGridMeasure, isDragActive }) {
       <DyingNodesLayer onMerge={handleChainMerge} />
       <ExplosionLayer />
     </View>
+
+    <CornerUnlockModal
+      visible={cornerModal !== null}
+      mode={cornerModal ?? 'confirm'}
+      cost={CORNER_UNLOCK_COST}
+      hexaCore={hexaCore}
+      onClose={handleCornerModalClose}
+      onConfirm={handleCornerUnlockConfirm}
+    />
+    </>
   );
 });
 
-// ── PowerUpBtn — tek bir yetenek butonu (kırmızı flaş desteği) ──────────────
+// ── PowerUpBtn — tek bir yetenek butonu (kırmızı flaş + pulse nefes desteği) ─
 function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
   // Border animasyonu: tıklanınca kırmızı flaş → mat griye geri dön
   const borderAnim = useRef(new Animated.Value(0)).current;
   const flashRef = useRef(null);
+
+  // Pulse (nefes) animasyonu — buton hazır hissiyatı
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const pulseLoopRef = useRef(null);
+  const pulsePhase = useRef(Math.floor(Math.random() * 2400)).current;
+  useEffect(() => {
+    const t = setTimeout(() => {
+      pulseLoopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1, duration: 2200,
+            easing: Easing.inOut(Easing.sin), useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0, duration: 2200,
+            easing: Easing.inOut(Easing.sin), useNativeDriver: true,
+          }),
+        ])
+      );
+      pulseLoopRef.current.start();
+    }, pulsePhase);
+    return () => { clearTimeout(t); pulseLoopRef.current?.stop(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pulseScale = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1.0, canAfford ? 1.06 : 1.02],
+  });
 
   const triggerFlash = useCallback(() => {
     flashRef.current?.stop();
@@ -2388,22 +3375,243 @@ function PowerUpBtn({ def, cost, isActive, canAfford, canUse, onPress }) {
 
   return (
     <TouchableOpacity onPress={handleTap} activeOpacity={0.75}>
-      <Animated.View style={[
-        styles.powerBtn,
-        isActive && styles.powerBtnActive,
-        { borderColor: animBorderColor },
-      ]}>
-        <View style={{ opacity: iconOpacity }}>
-          <def.Icon size={iconSize} color={iconColor} />
-        </View>
-        <View style={styles.powerCostRow}>
-          <HexaCoreIcon size={11} color={hcIconColor} />
-          <Text style={[styles.powerCost, { color: costColor }]}>{cost}</Text>
-        </View>
+      <Animated.View style={{ transform: [{ scale: pulseScale }] }}>
+        <Animated.View style={[
+          styles.powerBtn,
+          isActive && styles.powerBtnActive,
+          { borderColor: animBorderColor },
+        ]}>
+          <View style={{ opacity: iconOpacity }}>
+            <def.Icon size={iconSize} color={iconColor} />
+          </View>
+          <View style={styles.powerCostRow}>
+            <HexaCoreIcon size={11} color={hcIconColor} />
+            <Text style={[styles.powerCost, { color: costColor }]}>{cost}</Text>
+          </View>
+        </Animated.View>
       </Animated.View>
     </TouchableOpacity>
   );
 }
+
+// ── Tehlike modu — dock + güçlendirme bölgesi neon kırmızı nefes ─────────────
+function DangerDockZone({ isCritical, children }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const loopRef = useRef(null);
+
+  useEffect(() => {
+    if (isCritical) {
+      Animated.timing(fadeAnim, { toValue: 1, duration: 380, useNativeDriver: true }).start();
+      loopRef.current?.stop();
+      loopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1400,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 0,
+            duration: 1400,
+            easing: Easing.inOut(Easing.sin),
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      loopRef.current.start();
+    } else {
+      loopRef.current?.stop();
+      pulseAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 0, duration: 520, useNativeDriver: true }).start();
+    }
+    return () => loopRef.current?.stop();
+  }, [isCritical]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const glowStrength = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.22, 0.52],
+  });
+  const glowOpacity = Animated.multiply(fadeAnim, glowStrength);
+
+  return (
+    <View style={dzStyles.zone}>
+      <Animated.View pointerEvents="none" style={[dzStyles.glow, { opacity: glowOpacity }]} />
+      {children}
+    </View>
+  );
+}
+
+// Dock ile güçlendirme arası — sabit yükseklik; yalnızca opacity değişir (layout kayması yok)
+const CRITICAL_BANNER_SLOT_H = Math.round(SCREEN_WIDTH * 0.13);
+
+function CriticalDangerBanner({ visible }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: visible ? 1 : 0,
+      duration: visible ? 380 : 520,
+      useNativeDriver: true,
+    }).start();
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <View style={[cdbStyles.slot, { height: CRITICAL_BANNER_SLOT_H }]}>
+      <Animated.View pointerEvents="none" style={[cdbStyles.wrap, { opacity: fadeAnim }]}>
+        <View style={cdbStyles.banner}>
+          <Text style={cdbStyles.label} numberOfLines={1} adjustsFontSizeToFit>
+            KRİTİK DOLULUK
+          </Text>
+          <View style={cdbStyles.divider} />
+          <Text style={cdbStyles.sub} numberOfLines={1} adjustsFontSizeToFit>
+            GÜÇLENDİRME KULLAN!
+          </Text>
+        </View>
+      </Animated.View>
+    </View>
+  );
+}
+
+const dzStyles = StyleSheet.create({
+  zone: {
+    width: '100%',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  glow: {
+    position: 'absolute',
+    left: Math.round(SCREEN_WIDTH * 0.04),
+    right: Math.round(SCREEN_WIDTH * 0.04),
+    top: -6,
+    bottom: -8,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,34,80,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,68,100,0.35)',
+    shadowColor: '#ff2266',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 16,
+    elevation: 6,
+  },
+});
+
+const cdbStyles = StyleSheet.create({
+  slot: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  wrap: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,80,110,0.55)',
+    backgroundColor: 'rgba(28,6,14,0.82)',
+    maxWidth: SCREEN_WIDTH * 0.9,
+    shadowColor: '#ff2266',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  label: {
+    color: '#ff8899',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '700',
+    letterSpacing: 2,
+  },
+  divider: {
+    width: 1,
+    height: 14,
+    backgroundColor: 'rgba(255,80,110,0.4)',
+  },
+  sub: {
+    color: '#ffbbcc',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '500',
+    letterSpacing: 1.5,
+  },
+});
+
+// ── İlk hamle ipucu — etiket ile taşlar arasında sabit slot ─────────────────
+const DRAG_TUTORIAL_SLOT_H = Math.round(SCREEN_WIDTH * 0.058);
+
+function DragTutorialHint({ visible }) {
+  const opacity = useRef(new Animated.Value(0)).current;
+  const shine = useRef(new Animated.Value(0.45)).current;
+  const loopRef = useRef(null);
+
+  useEffect(() => {
+    if (visible) {
+      opacity.setValue(0);
+      Animated.timing(opacity, { toValue: 1, duration: 420, useNativeDriver: true }).start();
+      loopRef.current?.stop();
+      loopRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(shine, { toValue: 1, duration: 1100, useNativeDriver: true }),
+          Animated.timing(shine, { toValue: 0.45, duration: 1100, useNativeDriver: true }),
+        ])
+      );
+      loopRef.current.start();
+    } else {
+      loopRef.current?.stop();
+      Animated.timing(opacity, { toValue: 0, duration: 480, useNativeDriver: true }).start();
+    }
+    return () => loopRef.current?.stop();
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const textOpacity = Animated.multiply(opacity, shine);
+
+  return (
+    <View style={dtStyles.slot}>
+      <Animated.View pointerEvents="none" style={[dtStyles.inner, { opacity: textOpacity }]}>
+        <Text style={dtStyles.hintText} numberOfLines={2} adjustsFontSizeToFit>
+          TAŞLAR SABİTTİR — TAHTAYA YENİ TAŞ SÜRÜKLE
+        </Text>
+      </Animated.View>
+    </View>
+  );
+}
+
+const dtStyles = StyleSheet.create({
+  slot: {
+    width: '100%',
+    height: DRAG_TUTORIAL_SLOT_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  inner: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hintText: {
+    color: '#dd99ff',
+    fontSize: Math.round(SCREEN_WIDTH * 0.022),
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    textAlign: 'center',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.028),
+    textShadowColor: 'rgba(170,68,255,0.9)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 10,
+    maxWidth: SCREEN_WIDTH * 0.88,
+  },
+});
 
 // ── PowerUpBar ────────────────────────────────────────────────────────────────
 function PowerUpBar() {
@@ -2455,15 +3663,14 @@ function PowerUpBar() {
 }
 
 // ── PiecePreview — önizleme hex, doğrudan sürüklenebilir ─────────────────────
-// canDrag=false ise taş soluk/kırmızımsı görünür; sürüklenirse hata sesi çalar
-function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd }) {
+function PiecePreview({ value, pieceIdx, onDragStart, onDragMove, onDragEnd }) {
   const liftAnim = useRef(new Animated.Value(1)).current;
   // Neon glow: dokunuşta 0→1, bırakınca 1→0
   const glowAnim = useRef(new Animated.Value(0)).current;
 
   // Her render'da güncel değerlere erişmek için ref — PanResponder closure tuzağını önler
-  const cbRef = useRef({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd });
-  cbRef.current = { value, pieceIdx, canDrag, onDragStart, onDragMove, onDragEnd };
+  const cbRef = useRef({ value, pieceIdx, onDragStart, onDragMove, onDragEnd });
+  cbRef.current = { value, pieceIdx, onDragStart, onDragMove, onDragEnd };
 
   const _glowIn = useCallback(() => {
     Animated.timing(glowAnim, { toValue: 1, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: false }).start();
@@ -2480,12 +3687,7 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
         Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4,
 
       onPanResponderGrant: (evt, gs) => {
-        const { canDrag: cd, pieceIdx: pi, value: val, onDragStart: ds } = cbRef.current;
-        if (!cd) {
-          safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
-          playSound('error');
-          return;
-        }
+        const { pieceIdx: pi, value: val, onDragStart: ds } = cbRef.current;
         Animated.spring(liftAnim, { toValue: 1.18, speed: 60, useNativeDriver: false }).start();
         cbRef.current._glowIn?.();
         ds(pi, val, gs.moveX, gs.moveY);
@@ -2513,17 +3715,46 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
   cbRef.current._glowIn = _glowIn;
   cbRef.current._glowOut = _glowOut;
 
-  const fill = canDrag ? nodeColor(value) : '#2a1020';
-  const stroke = canDrag ? nodeStrokeColor(value) : '#662233';
+  const baseFill = nodeColor(value);
+  const stroke = nodeStrokeColor(value);
   const cx = PREVIEW_W / 2;
   const cy = PREVIEW_R;
   const label = formatNum(value);
-  const fs = label.length === 1 ? Math.round(PREVIEW_R * 0.52)
-    : label.length === 2 ? Math.round(PREVIEW_R * 0.45)
-      : label.length === 3 ? Math.round(PREVIEW_R * 0.39)
-        : label.length === 4 ? Math.round(PREVIEW_R * 0.33)
-          : Math.round(PREVIEW_R * 0.27);
+  const fs = nodeLabelFontSize(label, PREVIEW_R);
   const pad = 10;
+  const previewW = PREVIEW_W + pad * 2;
+  const previewH = PREVIEW_H + pad * 2;
+
+  // Tier materyal sistemi (NodeHex ile aynı)
+  const log2v = Math.floor(Math.log2(Math.max(2, value)));
+  const tier = log2v >= 7 ? 2 : log2v >= 4 ? 1 : 0;
+
+  // SVG viewBox koordinat alanı: minX=-pad, minY=-pad
+  const [pgx1, pgy1, pgx2, pgy2] = tier === 0
+    ? [-pad, -pad, PREVIEW_W + pad, PREVIEW_H + pad]   // metal: çapraz
+    : [cx, -pad, cx, PREVIEW_H + pad];                 // taş/mücevher: dikey
+
+  const pStops = tier === 0
+    ? [
+      { off: '0%', color: stroke, op: 0.65 },
+      { off: '28%', color: stroke, op: 0.22 },
+      { off: '60%', color: baseFill, op: 0.94 },
+      { off: '100%', color: '#020008', op: 0.98 },
+    ]
+    : tier === 1
+      ? [
+        { off: '0%', color: '#ffffff', op: 0.18 },
+        { off: '22%', color: stroke, op: 0.68 },
+        { off: '58%', color: baseFill, op: 0.90 },
+        { off: '100%', color: '#010006', op: 0.99 },
+      ]
+      : [
+        { off: '0%', color: '#ffffff', op: 0.28 },
+        { off: '16%', color: stroke, op: 0.82 },
+        { off: '40%', color: stroke, op: 0.32 },
+        { off: '72%', color: baseFill, op: 0.88 },
+        { off: '100%', color: '#010005', op: 0.99 },
+      ];
 
   // Glow opacity: 0→0.55 — daha zarif, göze batmayan parlama
   const glowLayerOpacity = glowAnim.interpolate({
@@ -2572,40 +3803,91 @@ function PiecePreview({ value, pieceIdx, canDrag, onDragStart, onDragMove, onDra
 
       <Animated.View
         {...panResponder.panHandlers}
-        style={{ transform: [{ scale: liftAnim }], opacity: canDrag ? 1 : 0.45 }}
+        style={{ transform: [{ scale: liftAnim }] }}
       >
+        <View style={{ width: previewW, height: previewH }}>
         <Svg
-          width={PREVIEW_W + pad * 2}
-          height={PREVIEW_H + pad * 2}
-          viewBox={`${-pad} ${-pad} ${PREVIEW_W + pad * 2} ${PREVIEW_H + pad * 2}`}
+          width={previewW}
+          height={previewH}
+          viewBox={`${-pad} ${-pad} ${previewW} ${previewH}`}
         >
-          {/* Sürüklenebilir hint halkası */}
+          <Defs>
+            <SvgLinearGradient
+              id="pmg"
+              x1={pgx1} y1={pgy1} x2={pgx2} y2={pgy2}
+              gradientUnits="userSpaceOnUse"
+            >
+              {pStops.map((s, i) => (
+                <SvgStop key={i} offset={s.off} stopColor={s.color} stopOpacity={s.op} />
+              ))}
+            </SvgLinearGradient>
+          </Defs>
+
+          {/* Dış aura */}
           <Polygon
-            points={hexPoints(cx, cy, PREVIEW_DRAW_R + 7)}
+            points={hexPoints(cx, cy, PREVIEW_DRAW_R * 1.18)}
+            fill={`${stroke}07`}
+            stroke={`${stroke}22`}
+            strokeWidth={2}
+          />
+
+          {/* Sürüklenebilir hint halkası — bounds içinde */}
+          <Polygon
+            points={hexPoints(cx, cy, PREVIEW_DRAW_R + 3)}
             fill="none"
             stroke={stroke}
-            strokeWidth={1.5}
-            opacity={0.35}
+            strokeWidth={1.2}
+            opacity={0.30}
           />
-          {/* Dolgu */}
+
+          {/* Ana materyal dolgu */}
           <Polygon
             points={hexPoints(cx, cy, PREVIEW_DRAW_R)}
-            fill={fill}
+            fill="url(#pmg)"
             stroke={stroke}
-            strokeWidth={STROKE_W * 1.6}
+            strokeWidth={tier === 2 ? 2.0 : STROKE_W * 1.6}
             strokeLinejoin="miter"
           />
-          {/* Değer etiketi */}
-          <SvgText
-            x={cx} y={cy + fs * 0.37}
-            textAnchor="middle"
-            fontSize={fs}
-            fill={C.nodeText}
-            fontWeight="bold"
-          >
-            {label}
-          </SvgText>
+
+          {/* Orta facet ring */}
+          <Polygon
+            points={hexPoints(cx, cy, PREVIEW_DRAW_R * 0.78)}
+            fill="none"
+            stroke={`${stroke}38`}
+            strokeWidth={tier === 2 ? 1.2 : 0.8}
+          />
+
+          {/* Mücevher iç parlaması */}
+          {tier === 2 && (
+            <>
+              <Polygon
+                points={hexPoints(cx, cy, PREVIEW_DRAW_R * 0.50)}
+                fill={`${stroke}14`}
+                stroke={`${stroke}48`}
+                strokeWidth={0.8}
+              />
+              <Polygon
+                points={hexPoints(cx, cy, PREVIEW_DRAW_R * 0.28)}
+                fill={`${stroke}18`}
+                stroke="none"
+              />
+            </>
+          )}
+
+          {/* Üst köşe highlight */}
+          <Polygon
+            points={hexPoints(cx, cy - PREVIEW_DRAW_R * 0.30, PREVIEW_DRAW_R * (tier === 2 ? 0.26 : 0.16))}
+            fill={`${stroke}${tier === 2 ? '1e' : '10'}`}
+            stroke="none"
+          />
+
         </Svg>
+        <View pointerEvents="none" style={styles.hexLabelOverlay}>
+          <Text style={[hexLabelTextStyle, { fontSize: fs, opacity: tier === 2 ? 0.97 : 0.92 }]}>
+            {label}
+          </Text>
+        </View>
+        </View>
       </Animated.View>
     </View>
   );
@@ -2628,8 +3910,8 @@ const GUIDE_ITEMS = [
   {
     IconComp: TrophyIcon,
     iconColor: '#ffaa22',
-    title: 'DİNAMİK TAŞ AKIŞI',
-    desc: 'Tahtandaki en büyük taş 128\'i geçince sıradaki taşlar da büyümeye başlar. 1024\'e ulaştığında havuza 16, 32, 64 gibi değerler karışır — tahta giderek daha dolu gelir.',
+    title: 'AĞIRLIKLI TAŞ AKIŞI',
+    desc: 'Yeni dock taşları sabit olasılıklarla gelir: tahtada 128 yokken %75 ile 2, %25 ile 4. Tahtada 128 veya üstü bir taş varken %75 ile 2, %20 ile 4, %5 ile 8. 16 ve 32 yalnızca birleşerek oluşur; sistem bunları asla hazır vermez.',
   },
   {
     IconComp: WormholeIcon,
@@ -3007,6 +4289,302 @@ function FloatingBackground() {
     </View>
   );
 }
+
+// ── NebulaBackground — merkezi mor parıltı + köşelere doğru zifiri karanlık ────
+function NebulaBackground() {
+  const w = SCREEN_WIDTH;
+  const h = SCREEN_HEIGHT;
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width={w} height={h}>
+        <Defs>
+          {/* Merkez koyu mor parıltı */}
+          <RadialGradient id="nb_glow" cx="50%" cy="44%" r="62%">
+            <SvgStop offset="0%" stopColor="#2e0a62" stopOpacity="0.60" />
+            <SvgStop offset="50%" stopColor="#130430" stopOpacity="0.35" />
+            <SvgStop offset="100%" stopColor="#000000" stopOpacity="0" />
+          </RadialGradient>
+          {/* Kenar vinyeti — köşeleri siyaha gömer */}
+          <RadialGradient id="nb_vignette" cx="50%" cy="50%" r="72%">
+            <SvgStop offset="0%" stopColor="#000000" stopOpacity="0" />
+            <SvgStop offset="75%" stopColor="#000000" stopOpacity="0.18" />
+            <SvgStop offset="100%" stopColor="#000000" stopOpacity="0.55" />
+          </RadialGradient>
+        </Defs>
+        <SvgRect width={w} height={h} fill="url(#nb_glow)" />
+        <SvgRect width={w} height={h} fill="url(#nb_vignette)" />
+      </Svg>
+    </View>
+  );
+}
+
+// ── CornerUnlockModal — köşe açma onayı (oyun teması) ─────────────────────────
+function CornerUnlockModal({ visible, mode, cost, hexaCore, onClose, onConfirm }) {
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const isNoHC = mode === 'noHC';
+
+  useEffect(() => {
+    if (visible) {
+      slideAnim.setValue(50);
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+        Animated.spring(slideAnim, { toValue: 0, speed: 18, bounciness: 6, useNativeDriver: true }),
+      ]).start();
+    } else {
+      Animated.parallel([
+        Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }),
+        Animated.timing(slideAnim, { toValue: 50, duration: 180, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const canAfford = (hexaCore ?? 0) >= cost;
+
+  return (
+    <Modal visible={visible} transparent animationType="none" statusBarTranslucent onRequestClose={onClose}>
+      <Animated.View style={[cunStyles.overlay, { opacity: fadeAnim }]}>
+        <Animated.View style={[cunStyles.box, { transform: [{ translateY: slideAnim }] }]}>
+          <View style={cunStyles.iconRow}>
+            <HexaCoreIcon size={26} color={isNoHC ? '#cc7799' : C.econCredits} />
+          </View>
+
+          <Text style={[cunStyles.title, isNoHC && cunStyles.titleWarn]} adjustsFontSizeToFit numberOfLines={1}>
+            {isNoHC ? 'YETERSİZ HEXACORE' : 'KÖŞEYİ AÇ'}
+          </Text>
+
+          <Text style={cunStyles.message}>
+            {isNoHC
+              ? `Bu köşe ${cost} HexaCore gerektiriyor. Oyun sonunda veya mağazadan biriktirebilirsin.`
+              : `${cost} HexaCore harcayarak bu köşeyi kalıcı olarak açacaksın.`}
+          </Text>
+
+          {!isNoHC && (
+            <View style={cunStyles.costPill}>
+              <HexaCoreIcon size={13} color={C.econCredits} />
+              <Text style={cunStyles.costVal}>{cost}</Text>
+              <Text style={cunStyles.costLbl}>HexaCore</Text>
+              <View style={cunStyles.costSep} />
+              <Text style={[cunStyles.balanceLbl, !canAfford && cunStyles.balanceLow]}>
+                Bakiye {hexaCore ?? 0}
+              </Text>
+            </View>
+          )}
+
+          <View style={cunStyles.divider} />
+
+          {isNoHC ? (
+            <TouchableOpacity
+              style={cunStyles.singleBtn}
+              onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); onClose(); }}
+              activeOpacity={0.82}
+            >
+              <Text style={cunStyles.singleBtnTxt}>T A M A M</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={cunStyles.btnRow}>
+              <TouchableOpacity
+                style={cunStyles.cancelBtn}
+                onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); onClose(); }}
+                activeOpacity={0.82}
+              >
+                <Text style={cunStyles.cancelTxt}>İ P T A L</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[cunStyles.confirmBtn, !canAfford && cunStyles.confirmBtnDim]}
+                onPress={() => {
+                  if (!canAfford) return;
+                  playSound('click');
+                  safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
+                  onConfirm();
+                }}
+                activeOpacity={0.82}
+                disabled={!canAfford}
+              >
+                <View style={cunStyles.confirmCostRow}>
+                  <Text style={[cunStyles.confirmTxt, !canAfford && cunStyles.confirmTxtDim]}>
+                    A Ç
+                  </Text>
+                  <HexaCoreIcon
+                    size={12}
+                    color={canAfford ? C.econCredits : '#443355'}
+                  />
+                  <Text style={[cunStyles.confirmCostVal, !canAfford && cunStyles.confirmTxtDim]}>
+                    {cost}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+        </Animated.View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+const cunStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: C.modalOverlay,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.06),
+  },
+  box: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: COLOR_MODAL_BG,
+    borderWidth: 1.5,
+    borderColor: C.modalBorder,
+    borderRadius: 20,
+    paddingHorizontal: Math.round(SCREEN_WIDTH * 0.07),
+    paddingTop: Math.round(SCREEN_WIDTH * 0.07),
+    paddingBottom: Math.round(SCREEN_WIDTH * 0.06),
+    alignItems: 'center',
+    elevation: 12,
+    shadowColor: C.modalBorder,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+  },
+  iconRow: {
+    marginBottom: Math.round(SCREEN_WIDTH * 0.03),
+  },
+  title: {
+    color: C.titlePrimary,
+    fontSize: Math.round(SCREEN_WIDTH * 0.036),
+    fontWeight: '700',
+    letterSpacing: 3,
+    textAlign: 'center',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.04),
+  },
+  titleWarn: {
+    color: '#cc7799',
+    letterSpacing: 2,
+  },
+  message: {
+    color: '#aa88bb',
+    fontSize: Math.round(SCREEN_WIDTH * 0.032),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+    lineHeight: Math.round(SCREEN_WIDTH * 0.052),
+    marginBottom: Math.round(SCREEN_WIDTH * 0.045),
+  },
+  costPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: C.btnBorder,
+    backgroundColor: C.btnBg,
+    marginBottom: Math.round(SCREEN_WIDTH * 0.045),
+  },
+  costVal: {
+    color: C.modalAmount,
+    fontSize: Math.round(SCREEN_WIDTH * 0.036),
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  costLbl: {
+    color: C.modalTitle,
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+  },
+  costSep: {
+    width: 1,
+    height: 12,
+    backgroundColor: C.econSep,
+    marginHorizontal: 4,
+  },
+  balanceLbl: {
+    color: COLOR_NEON_CYAN,
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '300',
+    letterSpacing: 0.5,
+  },
+  balanceLow: {
+    color: '#cc7799',
+  },
+  divider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: 'rgba(136,85,204,0.25)',
+    marginBottom: Math.round(SCREEN_WIDTH * 0.05),
+  },
+  btnRow: {
+    flexDirection: 'row',
+    gap: Math.round(SCREEN_WIDTH * 0.03),
+    width: '100%',
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3a2a4a',
+    backgroundColor: C.btnBg,
+    alignItems: 'center',
+  },
+  cancelTxt: {
+    color: '#887799',
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '400',
+    letterSpacing: 3,
+  },
+  confirmBtn: {
+    flex: 1.6,
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.btnBorder,
+    backgroundColor: 'rgba(119,68,204,0.22)',
+    alignItems: 'center',
+  },
+  confirmBtnDim: {
+    borderColor: C.btnDisabledBorder,
+    backgroundColor: 'rgba(30,20,50,0.35)',
+  },
+  confirmCostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  confirmTxt: {
+    color: C.btnText,
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '600',
+    letterSpacing: 2,
+  },
+  confirmCostVal: {
+    color: C.btnText,
+    fontSize: Math.round(SCREEN_WIDTH * 0.024),
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  confirmTxtDim: {
+    color: C.btnDisabledText,
+  },
+  singleBtn: {
+    width: '100%',
+    paddingVertical: Math.round(SCREEN_WIDTH * 0.032),
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: C.btnBorder,
+    backgroundColor: 'rgba(119,68,204,0.18)',
+    alignItems: 'center',
+  },
+  singleBtnTxt: {
+    color: C.btnText,
+    fontSize: Math.round(SCREEN_WIDTH * 0.026),
+    fontWeight: '400',
+    letterSpacing: 3,
+  },
+});
 
 // ── RestartConfirmModal ────────────────────────────────────────────────────────
 function RestartConfirmModal({ visible, onClose, onConfirm }) {
@@ -3694,11 +5272,21 @@ export default function App() {
 
 function AppInner() {
   const insets = useSafeAreaInsets();
-  const cells = useStore((s) => s.cells);
-  const credits = useStore((s) => s.credits);
-  const uretMaliyeti = useStore((s) => s.uretMaliyeti);
   const nextPieces = useStore((s) => s.nextPieces);
   const gameOver = useStore((s) => s.gameOver);
+  const lastChancePending = useStore((s) => s.lastChancePending);
+  const cells = useStore((s) => s.cells);
+  const unlockedCorners = useStore((s) => s.unlockedCorners);
+  const credits = useStore((s) => s.credits);
+  const dragTutorialDismissed = useStore((s) => s.dragTutorialDismissed);
+  const dismissDragTutorial = useStore((s) => s.dismissDragTutorial);
+
+  const emptyPlayableCount = useMemo(
+    () => countPlayableEmptyCells(cells, unlockedCorners),
+    [cells, unlockedCorners]
+  );
+  const isCriticalDanger = emptyPlayableCount <= 2;
+  const showDragTutorial = (credits ?? 0) === 0 && !dragTutorialDismissed;
   // Navigasyon + Lab (store'dan)
   const currentScreen = useStore((s) => s.currentScreen);
   const setScreen = useStore((s) => s.setScreen);
@@ -3736,9 +5324,9 @@ function AppInner() {
     setScreen('MENU');
   }, [setScreen]);
 
-  const canDrag = true; // TEST: kredi sınırı kapalı
-
   useEffect(() => { initAudio(); }, []);
+
+  const { isRewardedAdLoaded, showLastChanceRewarded } = useLastChanceRewardedAd();
 
   const handleGridMeasure = useCallback((px, py) => {
     gridAbsPos.current = { x: px, y: py };
@@ -3772,6 +5360,9 @@ function AppInner() {
     if (cellIdx === -1) return;
     const result = useStore.getState().spawnFromPreview(pi, cellIdx);
     if (result.ok) {
+      if (!useStore.getState().dragTutorialDismissed) {
+        dismissDragTutorial();
+      }
       safeHaptic.impact(Haptics.ImpactFeedbackStyle.Medium);
       playSound(result.merged ? 'merge' : 'spawn');
     } else {
@@ -3779,93 +5370,106 @@ function AppInner() {
       safeHaptic.notification(Haptics.NotificationFeedbackType.Error);
       playSound('error');
     }
-  }, []);
+  }, [dismissDragTutorial]);
 
   // Ekran yönlendirme
   if (currentScreen === 'LAB') return <LabScreen />;
   if (currentScreen === 'MENU') return <MainMenu />;
 
   return (
-    <SafeAreaView style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+    <View style={styles.rootBg}>
+      {/* Nebula glow + devre kartı deseni */}
+      <NebulaBackground />
 
-      {/* Oyun Bitti Modalı */}
-      <GameOverModal visible={gameOver} onOpenLab={handleOpenLabFromGameOver} />
+      <SafeAreaView style={[styles.root, { backgroundColor: 'transparent' }]}>
+        <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
 
-      {/* Oyunu Sıfırla Onay Modalı */}
-      <RestartConfirmModal
-        visible={restartConfirmVisible}
-        onClose={() => setRestartConfirmVisible(false)}
-        onConfirm={handleRestartConfirm}
-      />
+        {/* Son Şans Modalı */}
+        <LastChanceModal
+          visible={lastChancePending}
+          isRewardedAdLoaded={isRewardedAdLoaded}
+          showLastChanceRewarded={showLastChanceRewarded}
+        />
 
-      {/* Başlık */}
-      <View style={styles.header}>
-        <View style={styles.headerTitleRow}>
-          <TouchableOpacity
-            style={styles.homeBtn}
-            onPress={handleGoMenu}
-            activeOpacity={0.75}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <HomeIcon size={30} color="#aa44ff" />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.restartBtn}
-            onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRestartConfirmVisible(true); }}
-            activeOpacity={0.75}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <RestartIcon size={28} color="#ff6644" />
-          </TouchableOpacity>
+        {/* Oyun Bitti Modalı */}
+        <GameOverModal visible={gameOver} onOpenLab={handleOpenLabFromGameOver} />
+
+        {/* Oyunu Sıfırla Onay Modalı */}
+        <RestartConfirmModal
+          visible={restartConfirmVisible}
+          onClose={() => setRestartConfirmVisible(false)}
+          onConfirm={handleRestartConfirm}
+        />
+
+        {/* Başlık */}
+        <View style={styles.header}>
+          <View style={styles.headerBtnRow}>
+            <TouchableOpacity
+              style={styles.homeBtn}
+              onPress={handleGoMenu}
+              activeOpacity={0.75}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <HomeIcon size={30} color="#aa44ff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.restartBtn}
+              onPress={() => { playSound('click'); safeHaptic.impact(Haptics.ImpactFeedbackStyle.Light); setRestartConfirmVisible(true); }}
+              activeOpacity={0.75}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <RestartIcon size={28} color="#ff6644" />
+            </TouchableOpacity>
+          </View>
+          <EconDisplay onOpenLab={handleOpenLab} />
         </View>
-        <EconDisplay onOpenLab={handleOpenLab} />
-      </View>
 
-      {/* Oyun Alanı */}
-      <View style={styles.gridWrapper}>
-        <HexGrid onGridMeasure={handleGridMeasure} isDragActive={isDragActive} />
-      </View>
-
-      {/* Footer — Sürüklenebilir parça önizlemeleri */}
-      <View style={styles.footer}>
-        <Text style={styles.nextLabel}>S O N R A K İ  —  S Ü R Ü K L E</Text>
-        <View style={styles.piecesRow}>
-          {(nextPieces ?? [2, 4]).map((val, i) => (
-            <PiecePreview
-              key={i}
-              pieceIdx={i}
-              value={val}
-              canDrag={canDrag}
-              onDragStart={handlePreviewDragStart}
-              onDragMove={handlePreviewDragMove}
-              onDragEnd={handlePreviewDragEnd}
-            />
-          ))}
+        {/* Oyun Alanı */}
+        <View style={styles.gridWrapper}>
+          <HexGrid onGridMeasure={handleGridMeasure} isDragActive={isDragActive} />
         </View>
-        {!canDrag && (
-          <Text style={styles.noCreditsHint}>
-            Yeterli kredi yok — bekle
-          </Text>
-        )}
-      </View>
 
-      {/* Power-up çubuğu — footer'dan ayrı, navigasyon barının üstünde sabitlenmiş */}
-      <View style={[styles.powerBarContainer, { paddingBottom: insets.bottom + 15 }]}>
-        <PowerUpBar />
-      </View>
+        {/* Dock + güçlendirme — tehlike modu + ilk hamle ipucu */}
+        <DangerDockZone isCritical={isCriticalDanger}>
+          <View style={styles.footer}>
+            <Text style={styles.nextLabel}>S O N R A K İ  —  S Ü R Ü K L E</Text>
+            <DragTutorialHint visible={showDragTutorial} />
+            <View style={styles.piecesRow}>
+              {(nextPieces ?? [2, 4]).map((val, i) => (
+                <PiecePreview
+                  key={i}
+                  pieceIdx={i}
+                  value={val}
+                  onDragStart={handlePreviewDragStart}
+                  onDragMove={handlePreviewDragMove}
+                  onDragEnd={handlePreviewDragEnd}
+                />
+              ))}
+            </View>
+          </View>
 
-      {/* Sürükleme ghost — Animated.ValueXY ile doğrudan konumlanır, re-render yok */}
-      <GhostPiece ref={ghostRef} />
-    </SafeAreaView>
+          <CriticalDangerBanner visible={isCriticalDanger} />
+
+          <View style={[styles.powerBarContainer, { paddingBottom: insets.bottom + 15 }]}>
+            <PowerUpBar />
+          </View>
+        </DangerDockZone>
+
+        {/* Sürükleme ghost — Animated.ValueXY ile doğrudan konumlanır, re-render yok */}
+        <GhostPiece ref={ghostRef} />
+      </SafeAreaView>
+    </View>
   );
 }
 
 // ── Stiller ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  root: {
+  rootBg: {
     flex: 1,
     backgroundColor: C.bg,
+  },
+  root: {
+    flex: 1,
     alignItems: 'center',
   },
   header: {
@@ -3875,11 +5479,11 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     gap: 10,
   },
-  headerTitleRow: {
+  headerBtnRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 16,
+    gap: 20,
   },
   homeBtn: {
     padding: 10,
@@ -3901,6 +5505,7 @@ const styles = StyleSheet.create({
     fontWeight: '100',
     letterSpacing: 13,
     opacity: 0.95,
+    textAlign: 'center',
   },
   econRow: {
     flexDirection: 'row',
@@ -3934,6 +5539,12 @@ const styles = StyleSheet.create({
   nodeAbs: {
     position: 'absolute',
   },
+  hexLabelOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 2,
+  },
   floatText: {
     color: '#cc99ff',
     fontSize: RFS.float,
@@ -3945,7 +5556,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingTop: 8,
     paddingBottom: 6,
-    gap: 10,
+    gap: 6,
   },
   powerBarContainer: {
     alignItems: 'center',
@@ -3960,14 +5571,6 @@ const styles = StyleSheet.create({
     fontSize: Math.round(SCREEN_WIDTH * 0.020),
     fontWeight: '300',
     letterSpacing: 2,
-  },
-  noCreditsHint: {
-    color: '#cc4455',
-    fontSize: Math.round(SCREEN_WIDTH * 0.025),
-    fontWeight: '300',
-    letterSpacing: 1,
-    marginTop: 4,
-    opacity: 0.85,
   },
   piecesRow: {
     flexDirection: 'row',
